@@ -216,3 +216,8 @@ The installer retains the private data directory during updates. Program release
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [VALIDATION.md](VALIDATION.md). Environment overrides are documented in [.env.example](.env.example). Optional Docker deployment is available in `compose.yaml`; it requires a working Docker daemon.
 
 MIT licensed. Terminal wordmark uses the [ANSI Shadow FIGlet font from TAAG](https://patorjk.com/software/taag/#p=display&f=ANSI%20Shadow&t=PaPa-TDL). [Google device OAuth reference](https://developers.google.com/identity/protocols/oauth2/limited-input-device) · [Desktop OAuth reference](https://developers.google.com/identity/protocols/oauth2/native-app) · [pip's Python environment option](https://pip.pypa.io/en/stable/topics/python-option/)
+
+
+## Product website
+
+Static product, privacy and terms pages are in [site/](site/DEPLOYMENT.md). Deployment on hunt requires an administrator; source pages alone do not publish the website.
