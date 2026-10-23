@@ -1,10 +1,13 @@
-"""Resolve the application's Google identity without prompting end users."""
+"""Load private Google app configuration, with a first-login terminal setup."""
 
 import json
+import getpass
+import sys
 import re
 
 from . import _google_client
 from .common import StorageError
+from .config import private_json
 
 
 def desktop_config(config):
@@ -39,9 +42,26 @@ def resolve_desktop_config(settings, client_file=None):
             "client_id": _google_client.CLIENT_ID,
             "client_secret": _google_client.CLIENT_SECRET,
         }})
-    raise StorageError(
-        "Google sign-in is not configured in this release. The PaPa-TDL maintainer "
-        "must configure the app once with tools/configure_google_oauth.py and publish "
-        "the updated release. No sign-in URL can be generated yet. "
-        "For a personal setup, use papa-tdl drive-login --client-file /path/to/desktop.json."
-    )
+    if not sys.stdin.isatty():
+        raise StorageError(
+            "Google setup is needed once. Run papa-tdl drive-login in an interactive "
+            "terminal to enter your Desktop OAuth client details, or use --client-file."
+        )
+    print("Google Drive setup — one time for this server.")
+    print("Open https://console.cloud.google.com/auth/clients and select your Desktop app client.")
+    print("Copy its Client ID and Client secret below. No JSON transfer is needed.")
+    print("These are app settings, not your Google password. They stay private on this server.")
+    try:
+        client_id = input("Desktop Client ID (Enter to cancel): ").strip()
+        if not client_id:
+            raise StorageError("Google setup cancelled. Run papa-tdl drive-login when ready, or select local storage.")
+        client_secret = getpass.getpass("Desktop Client secret (hidden): ").strip()
+        config = desktop_config({"installed": {"client_id": client_id, "client_secret": client_secret}})
+        settings.prepare_storage()
+        private_json(settings.data_dir / "google-client.json", json.dumps(config))
+    except (EOFError, KeyboardInterrupt):
+        raise StorageError("Google setup cancelled. No sign-in was completed.") from None
+    except OSError:
+        raise StorageError("Could not save Google settings in the private data directory. Check its permissions.") from None
+    print("Google app settings saved. Starting browser sign-in...", flush=True)
+    return config

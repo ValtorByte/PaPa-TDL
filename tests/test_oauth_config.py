@@ -21,11 +21,34 @@ class AppOAuthTests(unittest.TestCase):
 
     def test_missing_release_identity_fails_without_prompt_or_network(self):
         with patch('tdl_watcher.oauth_config._google_client.CLIENT_ID', ''), \
+             patch('sys.stdin.isatty', return_value=False), \
              patch('builtins.input') as prompt, patch('requests.sessions.Session.request') as request:
-            with self.assertRaisesRegex(StorageError, 'maintainer'):
+            with self.assertRaisesRegex(StorageError, 'interactive'):
                 login_drive(self.settings)
         prompt.assert_not_called()
         request.assert_not_called()
+
+    def test_interactive_setup_saves_privately_and_is_reused(self):
+        with patch('tdl_watcher.oauth_config._google_client.CLIENT_ID', ''), \
+             patch('sys.stdin.isatty', return_value=True), \
+             patch('builtins.input', return_value='test.apps.googleusercontent.com') as prompt, \
+             patch('getpass.getpass', return_value='test-secret'), patch('builtins.print') as output:
+            resolve_desktop_config(self.settings)
+            resolve_desktop_config(self.settings)
+        prompt.assert_called_once()
+        path = self.settings.data_dir / 'google-client.json'
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('test-secret', str(output.call_args_list))
+        self.assertEqual(json.loads(path.read_text())['installed']['client_secret'], 'test-secret')
+
+    def test_interactive_invalid_details_do_not_save(self):
+        with patch('tdl_watcher.oauth_config._google_client.CLIENT_ID', ''), \
+             patch('sys.stdin.isatty', return_value=True), \
+             patch('builtins.input', return_value='invalid'), \
+             patch('getpass.getpass', return_value='test-secret'), patch('builtins.print'):
+            with self.assertRaises(StorageError):
+                resolve_desktop_config(self.settings)
+        self.assertFalse((self.settings.data_dir / 'google-client.json').exists())
 
     def test_bundled_identity_generates_real_google_url_with_pkce(self):
         with patch('tdl_watcher.oauth_config._google_client.CLIENT_ID', 'test.apps.googleusercontent.com'), \

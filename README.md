@@ -82,7 +82,7 @@ The menu shows the configured destination, the local default folder, and whether
 
 Skip this section if you selected **local**. Google still requires your consent; the program cannot connect to an arbitrary Drive account without authorization.
 
-OAuth credentials are not included in this public repository. Configure each server once with a Desktop OAuth JSON in its private runtime data directory; later logins reuse it automatically.
+OAuth credentials are not included in this public repository. Run `papa-tdl drive-login` in an interactive terminal: on first use it asks for your Desktop Client ID and hidden Client secret, saves them privately, then prints the Google browser sign-in URL. No JSON transfer is needed. Later logins reuse these settings. A Desktop OAuth client and the VPS SSH callback forward are still required.
 
 **One-time server setup:**
 
@@ -203,7 +203,7 @@ If you use the remote one-command installer, first publish the new source to Git
 | `System has not been booted with systemd` | The native installer does not call systemctl. Use `papa-tdl start/stop/status` instead. |
 | Drive is not connected | Run `papa-tdl drive-login`, approve the browser link and wait for `Google Drive connected`; or select local in setup. |
 | `TV OAuth client ID` appears | You are running version 1.3.0 or explicitly selected `--method device`; update to 1.3.2 and use `papa-tdl drive-login`. |
-| No Google login URL appears | If the release is unconfigured, its maintainer must register/configure the app identity first. A personal `--client-file` is also supported. Check the callback port if occupied. |
+| No Google login URL appears | Run drive-login in an interactive terminal and complete the one-time Desktop Client ID/secret prompts. --client-file remains supported. Check the callback port if occupied. |
 | OAuth JSON cannot be read | Move it out of `/root` to the private data directory and assign it to the runtime user. |
 | Google approved, but the VPS times out | Open the SSH forward on the computer with the browser before following the link; leave it open through the redirect. |
 | Telegram is signed out | Stop the watcher and run `papa-tdl login` in an interactive terminal/tmux. |

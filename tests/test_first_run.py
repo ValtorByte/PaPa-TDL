@@ -47,11 +47,12 @@ class FirstRunTests(unittest.TestCase):
     def test_missing_oauth_client_keeps_setup_and_explains_the_next_step(self):
         # Accept defaults, try browser login without its JSON, defer Telegram.
         with patch('tdl_watcher.oauth_config._google_client.CLIENT_ID', ''), \
+             patch('sys.stdin.isatty', return_value=False), \
              patch('builtins.input', side_effect=['', '', '', '', 'n']), patch('builtins.print') as output:
             first_run(self.settings)
         displayed = str(output.call_args_list)
         self.assertIn('papa-tdl drive-login', displayed)
-        self.assertIn('maintainer', displayed)
+        self.assertIn('interactive', displayed)
         self.assertEqual(Settings.load().destination, 'drive')
 
     def test_first_launch_uses_saved_desktop_json_for_browser_login(self):
