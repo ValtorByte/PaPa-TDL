@@ -82,9 +82,9 @@ The menu shows the configured destination, the local default folder, and whether
 
 Skip this section if you selected **local**. Google still requires your consent; the program cannot connect to an arbitrary Drive account without authorization.
 
-OAuth credentials are not included in this public repository. Run `papa-tdl drive-login` in an interactive terminal: on first use it asks for your Desktop Client ID and hidden Client secret, saves them privately, then prints the Google browser sign-in URL. No JSON transfer is needed. Later logins reuse these settings. A Desktop OAuth client and the VPS SSH callback forward are still required.
+This release includes PaPa-TDL's maintainer-approved Desktop OAuth app identity. Run `papa-tdl drive-login` to get the Google browser sign-in link; no JSON or Client ID entry is needed. Each user authorizes their own Google account. Existing private client overrides take precedence. This public app identity is not a user access token and is not encrypted or hashed. Google consent-screen audience and test-user restrictions still apply. VPS browser sign-in still requires the SSH forward below.
 
-**One-time server setup:**
+**Optional: use your own OAuth app instead:**
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), enable the **Google Drive API**.
 2. Configure the OAuth consent screen. If its status is **Testing**, add your Google account as a test user.

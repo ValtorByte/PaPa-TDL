@@ -21,6 +21,6 @@ A fork can set `PAPA_TDL_REPO=YOUR_USER/PaPa-TDL` at installation. The canonical
 
 ## Google sign-in for all users
 
-Never commit OAuth client secrets, JSON credentials, session files or user tokens. Configure Desktop OAuth privately on each host using DATA_DIR/google-client.json, readable only by the runtime user. The optional tools/configure_google_oauth.py utility saves to a private directory outside the repository; use --data-dir to select the runtime directory and run as its owner. It never writes credentials into source files.
+Never commit Web OAuth secrets, raw JSON credentials, session files or user tokens. The maintainer explicitly approved distributing this project's Desktop installed-app client identity in _google_client.py. This narrow exception does not apply to user credentials or other OAuth clients. Configure Desktop OAuth privately on each host using DATA_DIR/google-client.json, readable only by the runtime user. The optional tools/configure_google_oauth.py utility saves to a private directory outside the repository; use --data-dir to select the runtime directory and run as its owner. It never writes credentials into source files. The distributed Desktop app identity is maintained separately and must not be obfuscated to evade secret scanning.
 
 The resolver accepts --client-file or private DATA_DIR/google-client.json. Google endpoints and drive.file scope are fixed. Desktop callbacks on a VPS need SSH forwarding from the browser computer. Configure the consent screen audience and test users before login.
