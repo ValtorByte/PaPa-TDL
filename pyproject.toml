@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "papa-tdl"
-version = "1.3.2"
+version = "1.4.0"
 description = "Save Telegram files to your VPS or Google Drive with a private persistent login"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,6 +22,9 @@ dependencies = [
 papa-tdl = "tdl_watcher.__main__:main"
 tdl = "tdl_watcher.__main__:main"
 tdl-watcher = "tdl_watcher.__main__:main"
+
+[project.optional-dependencies]
+oauth-server = ["flask>=3.1,<4", "gunicorn>=23,<24", "cryptography>=44"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

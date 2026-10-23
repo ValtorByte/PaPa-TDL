@@ -70,7 +70,7 @@ The first interactive launch opens the setup wizard. Press **Enter** to accept a
 | Temporary transfers | `DATA_DIR/pending` |
 
 1. Choose **drive** or **local**. Leave the folder blank to use the automatic default.
-2. Connect Google if you chose Drive. After private OAuth configuration, the app shows a browser login link. Follow the one-time setup below.
+2. Connect Google if you chose Drive: open the printed HTTPS link on your phone or computer and approve access. The VPS continues automatically.
 3. Connect Telegram: type an international phone number such as `+989123456789`. Iranian mobile numbers starting `09` also work. **The phone number is visible while typing; the login code and two-step password are hidden.**
 4. Create/use your Telegram group **TDL** and send a small document to it.
 5. Choose **Check destination**, then **Start background watcher**.
@@ -82,7 +82,9 @@ The menu shows the configured destination, the local default folder, and whether
 
 Skip this section if you selected **local**. Google still requires your consent; the program cannot connect to an arbitrary Drive account without authorization.
 
-This release includes PaPa-TDL's maintainer-approved Desktop OAuth app identity. Run `papa-tdl drive-login` to get the Google browser sign-in link; no JSON or Client ID entry is needed. Each user authorizes their own Google account. Existing private client overrides take precedence. This public app identity is not a user access token and is not encrypted or hashed. Google consent-screen audience and test-user restrictions still apply. VPS browser sign-in still requires the SSH forward below.
+Run `papa-tdl drive-login`, open the printed HTTPS link on any computer or phone, and approve Google access. The browser displays success and your VPS checks the private TDL folder automatically. Keep the VPS command running until it prints `Google Drive connected`. No JSON, Client ID, copied code or SSH tunnel is required for this default flow. The hosted authentication service must be operational; maintainers must complete [service activation](ops/HOSTED-OAUTH.md) before publishing this version.
+
+The sign-in service temporarily handles authorization tokens and processes refresh requests. Your VPS stores its own private refresh token. Media transfers go directly between your runtime and Google Drive. See the [privacy policy](https://valtorbyte.ir/papa-tdl/privacy/). The following Desktop instructions are an optional independent alternative, not the normal setup.
 
 **Optional: use your own OAuth app instead:**
 
@@ -101,7 +103,7 @@ ssh -N -L 53682:127.0.0.1:53682 YOUR_SSH_USER@YOUR_VPS
 In the **VPS terminal**, run:
 
 ```bash
-papa-tdl drive-login
+papa-tdl drive-login --method browser
 ```
 
 Open the printed Google sign-in URL in your computer's browser and approve access. Google redirects to your computer's loopback address, and the SSH forward carries that response to PaPa-TDL. Leave both terminals open. Once the Drive folder is checked, the VPS prints `Google Drive connected`. **There is no TV code to enter.** If the app runs on the same computer as your browser, no SSH forward is needed.
@@ -109,10 +111,10 @@ Open the printed Google sign-in URL in your computer's browser and approve acces
 If the JSON is stored elsewhere, run:
 
 ```bash
-papa-tdl drive-login --client-file /absolute/path/to/desktop-client.json
+papa-tdl drive-login --method browser --client-file /absolute/path/to/desktop-client.json
 ```
 
-The alternative device-code flow remains available as `papa-tdl drive-login --method device`. It uses a **TVs and Limited Input devices** OAuth client and requires you to enter a short code on Google's site, but works without a tunnel. The default browser flow does not ask for TV credentials. Neither flow can create a Google sign-in link without an OAuth client configured first.
+The legacy `--method device` option requires your own TV OAuth client and supports only scopes Google permits for device clients; it is not the recommended Drive setup. Normal hosted sign-in uses the maintainer's Web client, whose secret stays on the central server.
 
 Now run:
 
@@ -193,7 +195,7 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.3.2`. A cached older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.4.0`. A cached older `main` script will still run the older installer.
 
 | Symptom | What to do |
 | --- | --- |
@@ -202,10 +204,10 @@ If you use the remote one-command installer, first publish the new source to Git
 | `papa-tdl: command not found` after a failed install | Finish installation successfully first. For a non-root install, also add `~/.local/bin` to PATH. |
 | `System has not been booted with systemd` | The native installer does not call systemctl. Use `papa-tdl start/stop/status` instead. |
 | Drive is not connected | Run `papa-tdl drive-login`, approve the browser link and wait for `Google Drive connected`; or select local in setup. |
-| `TV OAuth client ID` appears | You are running version 1.3.0 or explicitly selected `--method device`; update to 1.3.2 and use `papa-tdl drive-login`. |
-| No Google login URL appears | Run drive-login in an interactive terminal and complete the one-time Desktop Client ID/secret prompts. --client-file remains supported. Check the callback port if occupied. |
+| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.4.0 and use papa-tdl drive-login. |
+| No Google login URL appears | Check connectivity to the PaPa-TDL authentication service and retry. Users do not need an OAuth JSON for hosted sign-in. |
 | OAuth JSON cannot be read | Move it out of `/root` to the private data directory and assign it to the runtime user. |
-| Google approved, but the VPS times out | Open the SSH forward on the computer with the browser before following the link; leave it open through the redirect. |
+| Google approved, but the VPS times out | Keep drive-login running and use a fresh link if it expires. SSH forwarding is needed only for the optional --method browser flow. |
 | Telegram is signed out | Stop the watcher and run `papa-tdl login` in an interactive terminal/tmux. |
 | Local path is not writable | Create a dedicated directory owned by the runtime user. |
 

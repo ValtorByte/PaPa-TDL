@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from tdl_watcher.__main__ import first_run, parser, run, setup
 from tdl_watcher.config import Settings
+from tdl_watcher.common import StorageError
 
 
 class FirstRunTests(unittest.TestCase):
@@ -46,29 +47,28 @@ class FirstRunTests(unittest.TestCase):
 
     def test_missing_oauth_client_keeps_setup_and_explains_the_next_step(self):
         # Accept defaults, try browser login without its JSON, defer Telegram.
-        with patch('tdl_watcher.oauth_config._google_client.CLIENT_ID', ''), \
-             patch('sys.stdin.isatty', return_value=False), \
+        with patch('tdl_watcher.hosted_login.login_hosted', side_effect=StorageError('Sign-in service unavailable')), \
              patch('builtins.input', side_effect=['', '', '', '', 'n']), patch('builtins.print') as output:
             first_run(self.settings)
         displayed = str(output.call_args_list)
         self.assertIn('papa-tdl drive-login', displayed)
-        self.assertIn('interactive', displayed)
+        self.assertIn('unavailable', displayed)
         self.assertEqual(Settings.load().destination, 'drive')
 
     def test_first_launch_uses_saved_desktop_json_for_browser_login(self):
         client = self.settings.data_dir / 'google-client.json'
         client.write_text('{}')
         with patch('builtins.input', side_effect=['', '', '', '', 'n']), \
-             patch('tdl_watcher.drive.login_drive') as login, patch('builtins.print'):
+             patch('tdl_watcher.hosted_login.login_hosted') as login, patch('builtins.print'):
             first_run(self.settings)
-        login.assert_called_once_with(Settings.load())
+        self.assertEqual(login.call_args.args[0], Settings.load())
 
     def test_drive_login_command_defaults_to_browser(self):
         arguments = parser().parse_args(['drive-login'])
-        self.assertEqual(arguments.method, 'browser')
-        with patch('tdl_watcher.drive.login_drive') as login:
+        self.assertEqual(arguments.method, 'hosted')
+        with patch('tdl_watcher.hosted_login.login_hosted') as login:
             run(arguments, self.settings)
-        login.assert_called_once_with(self.settings, None, 53682)
+        self.assertEqual(login.call_args.args[0], self.settings)
 
     def test_explicit_local_choice_uses_default_folder_without_a_custom_path(self):
         with patch('builtins.input', side_effect=['local', '', '']), patch('builtins.print'):

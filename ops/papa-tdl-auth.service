@@ -1,0 +1,21 @@
+[Unit]
+Description=PaPa-TDL Google sign-in
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=papa-tdl-auth
+Group=papa-tdl-auth
+WorkingDirectory=/opt/papa-tdl-auth
+EnvironmentFile=/var/lib/papa-tdl-auth/service.env
+ExecStart=/opt/papa-tdl-auth/venv/bin/gunicorn --bind 127.0.0.1:9013 --workers 2 --timeout 45 --access-logfile /dev/null oauth_service:app
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/papa-tdl-auth
+
+[Install]
+WantedBy=multi-user.target

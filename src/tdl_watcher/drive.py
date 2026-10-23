@@ -207,7 +207,12 @@ class DriveClient:
         if not token.exists():
             raise StorageError("Connect Google Drive first: papa-tdl drive-login")
         try:
-            credentials = Credentials.from_authorized_user_file(str(token), SCOPES)
+            saved = json.loads(token.read_text(encoding="utf-8"))
+            if saved.get("papa_tdl_hosted") == 1:
+                from .hosted_login import HostedCredentials
+                credentials = HostedCredentials(None, saved["refresh_token"])
+            else:
+                credentials = Credentials.from_authorized_user_info(saved, SCOPES)
             if not credentials.valid:
                 credentials.refresh(Request())
                 private_json(token, credentials.to_json())

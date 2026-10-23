@@ -14,6 +14,7 @@ import sys
 from playwright.async_api import Error as BrowserError
 
 from .config import Settings, absolute_path, private_json
+from . import __version__
 from .common import StorageError
 from .direct import download_url, url_identity
 from .locks import locked
@@ -94,8 +95,9 @@ def first_run(settings):
     settings = Settings.load()
     if settings.destination == "drive" and ask_yes("Open Google sign-in in your browser now?"):
         try:
-            from .drive import login_drive
-            login_drive(settings)
+            from .hosted_login import login_hosted
+            from .drive import _save_and_check_drive
+            login_hosted(settings, _save_and_check_drive)
         except (StorageError, ValueError, OSError) as exc:
             print("Google Drive sign-in did not finish: " + str(exc))
             print("You can retry with menu option 6 or papa-tdl drive-login.")
@@ -143,7 +145,7 @@ def menu(settings):
 
 def parser():
     result = argparse.ArgumentParser(prog="papa-tdl", description="Save Telegram files on your VPS or Google Drive.")
-    result.add_argument("--version", action="version", version="PaPa-TDL 1.3.2")
+    result.add_argument("--version", action="version", version=f"PaPa-TDL {__version__}")
     sub = result.add_subparsers(dest="command")
     for command in ("setup", "login", "drive-login", "download", "telegram", "watch", "list", "select",
                     "check", "retry", "start", "stop", "status", "logs"):
@@ -159,8 +161,8 @@ def parser():
             item.add_argument("--ids", help="Comma-separated Telegram message IDs")
             item.add_argument("--once", action="store_true", help="Process visible matching media and exit")
         if command == "drive-login":
-            item.add_argument("--method", choices=["browser", "device"], default="browser",
-                              help="browser: Google sign-in page (default); device: link + code")
+            item.add_argument("--method", choices=["hosted", "browser", "device"], default="hosted",
+                              help="hosted: sign in from any browser (default); browser: local callback; device: personal TV client")
             item.add_argument("--client-file", type=Path, help="Optional personal OAuth JSON override; browser otherwise uses saved or bundled app identity")
             item.add_argument("--port", type=int, default=53682)
         if command == "logs":
@@ -197,7 +199,11 @@ def run(args, settings):
         return
     if args.command == "drive-login":
         from .drive import login_drive, login_drive_device
-        if args.method == "browser":
+        if args.method == "hosted":
+            from .hosted_login import login_hosted
+            from .drive import _save_and_check_drive
+            login_hosted(settings, _save_and_check_drive)
+        elif args.method == "browser":
             client_file = args.client_file.expanduser() if args.client_file else None
             login_drive(settings, client_file, args.port)
         else:
