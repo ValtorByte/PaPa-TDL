@@ -1,0 +1,12 @@
+include LICENSE
+include install.sh
+include requirements.lock
+include README.fa.md
+include VALIDATION.md
+include .env.example
+include Dockerfile
+include compose.yaml
+recursive-include tests *.py
+include CONTRIBUTING.md
+recursive-include assets *.svg
+recursive-include tools *.py

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "papa-tdl"
+version = "1.3.2"
+description = "Save Telegram files to your VPS or Google Drive with a private persistent login"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+  "playwright>=1.47,<2",
+  "requests>=2.32,<3",
+  "google-api-python-client>=2.150,<3",
+  "google-auth-oauthlib>=1.2,<2",
+  "portalocker>=2.8,<4",
+  "psutil>=5.9,<8",
+]
+
+[project.scripts]
+papa-tdl = "tdl_watcher.__main__:main"
+tdl = "tdl_watcher.__main__:main"
+tdl-watcher = "tdl_watcher.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

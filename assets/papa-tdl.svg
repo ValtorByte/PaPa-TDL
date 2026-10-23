@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="490" viewBox="0 0 1200 490" role="img" aria-labelledby="title description">
+<title id="title">PaPa-TDL</title>
+<desc id="description">Purple dimensional lettering. Save Telegram media to Google Drive or your own server.</desc>
+<defs>
+ <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0c0914"/><stop offset="1" stop-color="#191027"/></linearGradient>
+ <linearGradient id="face" x2="0.25" y2="1"><stop stop-color="#f7edff"/><stop offset="0.35" stop-color="#d8b4fe"/><stop offset="0.7" stop-color="#b784f3"/><stop offset="1" stop-color="#7940bd"/></linearGradient>
+ <radialGradient id="halo"><stop stop-color="#a855f7" stop-opacity=".28"/><stop offset="1" stop-color="#a855f7" stop-opacity="0"/></radialGradient>
+ <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse"><path d="M42 0H0V42" fill="none" stroke="#ac7add" stroke-opacity=".06"/></pattern>
+</defs>
+<rect width="1200" height="490" rx="25" fill="url(#bg)"/>
+<rect x="1" y="1" width="1198" height="488" rx="24" fill="none" stroke="#704197" stroke-opacity=".5"/>
+<rect width="1200" height="490" rx="25" fill="url(#grid)"/>
+<ellipse cx="950" cy="180" rx="330" ry="270" fill="url(#halo)"/>
+<g font-family="DejaVu Sans, Arial, sans-serif">
+ <circle cx="128" cy="73" r="4" fill="#d8b4fe"/>
+ <text x="146" y="79" fill="#c4a3e2" font-size="14" letter-spacing="3">TELEGRAM FILE TRANSFER</text>
+ <text x="1038" y="79" fill="#8e76a5" font-size="14">v1.1</text>
+ <g font-size="150" font-weight="900" letter-spacing="-6"><text x="138" y="272" fill="#481c78">PaPa-TDL</text>
+<text x="137" y="271" fill="#481c78">PaPa-TDL</text>
+<text x="136" y="270" fill="#481c78">PaPa-TDL</text>
+<text x="135" y="269" fill="#481c78">PaPa-TDL</text>
+<text x="134" y="268" fill="#481c78">PaPa-TDL</text>
+<text x="133" y="267" fill="#481c78">PaPa-TDL</text>
+<text x="132" y="266" fill="#481c78">PaPa-TDL</text>
+<text x="131" y="265" fill="#3c1763">PaPa-TDL</text>
+<text x="130" y="264" fill="#3c1763">PaPa-TDL</text>
+<text x="129" y="263" fill="#3c1763">PaPa-TDL</text>
+<text x="128" y="262" fill="#3c1763">PaPa-TDL</text>
+<text x="127" y="261" fill="#311350">PaPa-TDL</text>
+<text x="126" y="260" fill="#311350">PaPa-TDL</text>
+<text x="125" y="259" fill="#311350">PaPa-TDL</text>
+<text x="124" y="258" fill="#311350">PaPa-TDL</text>
+<text x="123" y="257" fill="#26103e">PaPa-TDL</text>
+<text x="122" y="256" fill="#26103e">PaPa-TDL</text>
+<text x="121" y="255" fill="#26103e">PaPa-TDL</text>
+ <text x="120" y="254" fill="url(#face)" stroke="#ead4ff" stroke-width=".65">PaPa-TDL</text></g>
+ <text x="125" y="329" fill="#f0e9f7" font-size="27" font-weight="600">Your Telegram. Your storage.</text>
+ <text x="126" y="363" fill="#a89ab8" font-size="18">One terminal. Google Drive or your own VPS.</text>
+ <rect x="125" y="402" width="211" height="36" rx="18" fill="#ac70ed" fill-opacity=".16" stroke="#ac70ed" stroke-opacity=".38"/>
+ <text x="145" y="425" fill="#e7cfff" font-size="13" font-weight="600">GOOGLE DRIVE DEFAULT</text>
+ <text x="363" y="425" fill="#a89ab8" font-size="13">PHONE + CODE LOGIN</text>
+ <text x="595" y="425" fill="#a89ab8" font-size="13">YOUR FILES STAY PRIVATE</text>
+</g>
+</svg>

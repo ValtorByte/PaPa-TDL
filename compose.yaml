@@ -1,0 +1,32 @@
+services:
+  tdl:
+    build: .
+    image: papa-tdl:1.3.2
+    init: true
+    user: "${TDL_UID:-1000}:${TDL_GID:-1000}"
+    environment:
+      TDL_DATA_DIR: /data
+      TDL_OUTPUT_DIR: /downloads
+    volumes:
+      - ./data:/data
+      - ${TDL_HOST_OUTPUT:-./downloads}:/downloads
+    shm_size: 1gb
+    stdin_open: true
+    tty: true
+    ports:
+      - "127.0.0.1:53682:53682"
+  watcher:
+    build: .
+    image: papa-tdl:1.3.2
+    init: true
+    user: "${TDL_UID:-1000}:${TDL_GID:-1000}"
+    environment:
+      TDL_DATA_DIR: /data
+      TDL_OUTPUT_DIR: /downloads
+    volumes:
+      - ./data:/data
+      - ${TDL_HOST_OUTPUT:-./downloads}:/downloads
+    shm_size: 1gb
+    restart: unless-stopped
+    command: ["watch"]
+    profiles: ["watch"]

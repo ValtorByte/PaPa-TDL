@@ -1,0 +1,10 @@
+*
+!Dockerfile
+!requirements.lock
+!pyproject.toml
+!README.md
+!src/
+!src/tdl_watcher/
+!src/tdl_watcher/*.py
+
+!LICENSE
