@@ -1,6 +1,6 @@
-# PaPa-TDL 1.6.0 validation
+# PaPa-TDL 1.6.1 validation
 
-Validated locally on Linux with CPython 3.12.15. The user-facing validation date is 2026-10-23 (Asia/Tehran).
+The 82-test suite and integration checks listed below were run on version 1.6.0 before the 1.6.1 recovery changes. Version 1.6.1 was checked for Python compilation, installer shell syntax, and whitespace errors on Linux with CPython 3.12. The 1.6.1 runtime changes still need a live watcher check after publishing.
 
 ## Passed
 

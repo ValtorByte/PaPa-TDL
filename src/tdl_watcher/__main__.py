@@ -18,7 +18,7 @@ from . import __version__
 from .common import StorageError
 from .direct import download_url, url_identity
 from .locks import locked
-from .service import retry_pending, watch
+from .service import retry_pending, submit_extract_password, watch
 from .storage import make_storage, LocalClient
 from .telegram import TelegramBrowser, TelegramError, safe_filename
 from .ui import banner, color, panel, dashboard
@@ -124,7 +124,7 @@ def menu(settings):
         "EXTRACTION",
         "    Send ZIP/RAR/7z archives to TDL; parts group automatically",
         "    Optional manual batch: /extract → files → /done",
-        "    If asked: /password YOUR_PASSWORD",
+        "    For encrypted archives: papa-tdl extract-password",
         "",
         "ACCOUNTS & STORAGE",
         " 5  Sign in to Telegram (phone + code)",
@@ -152,7 +152,7 @@ def parser():
     result = argparse.ArgumentParser(prog="papa-tdl", description="Save Telegram files on your VPS or Google Drive.")
     result.add_argument("--version", action="version", version=f"PaPa-TDL {__version__}")
     sub = result.add_subparsers(dest="command")
-    for command in ("setup", "login", "drive-login", "download", "telegram", "watch", "list", "select",
+    for command in ("setup", "login", "drive-login", "download", "telegram", "watch", "list", "select", "extract-password",
                     "check", "retry", "start", "stop", "status", "logs"):
         item = sub.add_parser(command)
         if command in {"download", "telegram", "watch", "list", "select", "check", "retry", "start"}:
@@ -293,6 +293,12 @@ def execute(args):
             background.logs(settings, args.follow)
         else:
             getattr(background, args.command)(settings)
+        return
+    if args.command == "extract-password":
+        if not sys.stdin.isatty():
+            raise ValueError("Run papa-tdl extract-password in an interactive terminal; the password prompt must stay hidden.")
+        password = getpass.getpass("Archive password (hidden): ")
+        submit_extract_password(settings, password)
         return
     try:
         with locked(settings.data_dir / "app.lock"):

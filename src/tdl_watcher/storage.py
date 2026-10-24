@@ -108,12 +108,22 @@ class LocalClient:
         destination = self.root / name
         if destination.exists():
             destination = self.root / f"{name} [{batch_id[-8:]}]"
+        marker_value = json.dumps({"batch_id": batch_id}, separators=(",", ":"))
+        if source.stat().st_dev == self.root.stat().st_dev:
+            marker = source / ".papa-tdl-batch.json"
+            marker.write_text(marker_value)
+            marker.chmod(0o600)
+            os.replace(source, destination)
+            item = self.find_batch(folder_id, batch_id)
+            if item is None:
+                raise StorageError("Local extracted-folder verification failed; source retained.")
+            return item
         temporary = Path(tempfile.mkdtemp(prefix=".papa-tdl-batch-", dir=self.root))
         try:
             payload = temporary / "payload"
             shutil.copytree(source, payload)
             marker = payload / ".papa-tdl-batch.json"
-            marker.write_text(json.dumps({"batch_id": batch_id}, separators=(",", ":")))
+            marker.write_text(marker_value)
             marker.chmod(0o600)
             os.replace(payload, destination)
         finally:

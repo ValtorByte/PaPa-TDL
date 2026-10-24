@@ -1,7 +1,7 @@
 services:
   tdl:
     build: .
-    image: papa-tdl:1.6.0
+    image: papa-tdl:1.6.1
     init: true
     user: "${TDL_UID:-1000}:${TDL_GID:-1000}"
     environment:
@@ -17,7 +17,7 @@ services:
       - "127.0.0.1:53682:53682"
   watcher:
     build: .
-    image: papa-tdl:1.6.0
+    image: papa-tdl:1.6.1
     init: true
     user: "${TDL_UID:-1000}:${TDL_GID:-1000}"
     environment:

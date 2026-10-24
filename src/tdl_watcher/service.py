@@ -21,6 +21,7 @@ from .telegram import TelegramBrowser, TelegramError, safe_filename
 
 PENDING_RE = re.compile(r"^([1-9][0-9]{0,16})_([1-9][0-9]{0,19})$")
 CONTROL_FILE = "extract-control.json"
+PASSWORD_FILE = "extract-password.json"
 AUTO_QUIET_SECONDS = 30
 
 
@@ -69,6 +70,44 @@ def _load_control(settings):
 
 def _save_control(settings, control):
     private_json(_control_path(settings), json.dumps(control, separators=(",", ":")))
+
+
+def submit_extract_password(settings, password: str) -> None:
+    """Queue a password for the active watcher without putting it in Telegram or logs."""
+    if not isinstance(password, str) or not password or len(password) > 4096:
+        raise ValueError("Enter a nonempty archive password of at most 4096 characters.")
+    control = _load_control(settings)
+    batch = control.get("batch")
+    if not batch or not batch.get("awaiting_password"):
+        raise ValueError("The watcher is not waiting for an archive password. Check papa-tdl logs first.")
+    password_path = settings.data_dir / PASSWORD_FILE
+    if password_path.exists():
+        raise ValueError("A password is already waiting for the watcher. Wait a few seconds and check papa-tdl logs.")
+    private_json(password_path, json.dumps({"password": password}, separators=(",", ":")))
+    print("Password sent securely to the running watcher. It will be removed after use.")
+
+
+def _consume_extract_password(settings) -> str | None:
+    path = settings.data_dir / PASSWORD_FILE
+    claim = settings.data_dir / ".extract-password.consume"
+    try:
+        claim.unlink(missing_ok=True)  # Clear a handoff left behind by a crashed prior watcher.
+        path.replace(claim)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise StorageError("The one-time archive password handoff could not be read; enter it again.") from None
+    try:
+        value = json.loads(claim.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise StorageError("The one-time archive password handoff is damaged; enter it again.") from None
+    finally:
+        # Claim atomically so a new password can't be deleted in a read/write race.
+        claim.unlink(missing_ok=True)
+    password = value.get("password") if isinstance(value, dict) else None
+    if not isinstance(password, str) or not password or len(password) > 4096:
+        raise StorageError("The one-time archive password handoff is invalid; enter it again.")
+    return password
 
 
 def _batch_root(settings, batch):
@@ -153,10 +192,35 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         spec = specs.get(mid)
         if not spec:
             if batch.get("done_mid"):
-                raise TelegramError(f"Batch file message {mid} is no longer visible; scroll to it and retry.")
+                print(f"Archive part {mid} is temporarily outside Telegram Web's loaded history; retrying scan.", flush=True)
+                return False
             return True
+        retry_at = float(batch.get("download_retry_at", {}).get(mid, 0))
+        if time.time() < retry_at:
+            return False
         print(f"Batch download: Telegram message {mid}", flush=True)
-        path = await browser.download(spec, destination=incoming)
+        try:
+            path = await browser.download(spec, destination=incoming)
+        except (TelegramError, BrowserError, OSError) as exc:
+            failures = batch.setdefault("download_failures", {})
+            count = int(failures.get(mid, 0)) + 1
+            failures[mid] = count
+            retry_at = batch.setdefault("download_retry_at", {})
+            retry_at[mid] = time.time() + min(300, 15 * (2 ** min(count - 1, 5)))
+            _save_control(settings, control)
+            print(f"Archive part {mid} download failed ({count} attempts): {exc}", flush=True)
+            if isinstance(exc, BrowserError):
+                await browser.stop()
+            elif count in {1, 3, 6}:
+                await browser.send_text(
+                    f"I could not download archive part {mid} (attempt {count}). I will retry automatically; "
+                    "check free server storage and papa-tdl logs if it keeps failing."
+                )
+            # Keep the watcher available for unrelated files while this archive
+            # part waits for its retry window.
+            return False
+        batch.setdefault("download_failures", {}).pop(mid, None)
+        batch.setdefault("download_retry_at", {}).pop(mid, None)
         batch["downloaded"][mid] = path.name
         _save_control(settings, control)
         return True  # Telegram's rendered message list may have changed.
@@ -166,7 +230,7 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
             batch["done_mid"] = max(batch["media"], key=int)
             _save_control(settings, control)
     if not batch.get("done_mid") or batch.get("awaiting_more"):
-        return True
+        return False if batch.get("awaiting_more") else True
     if not batch["media"]:
         await browser.send_text("No archive files were found between /extract and /done. Send /extract to start again.")
         control["batch"] = None
@@ -175,23 +239,23 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         return True
 
     password = None
-    password_commands = [event for event in commands
-                         if int(event["mid"]) > int(batch["done_mid"])
-                         and int(event["mid"]) > int(control["last_command_mid"])
-                         and re.match(r"^/password(?:@\w+)?\s+", event["text"], re.I)]
     if batch.get("awaiting_password"):
-        if not password_commands:
-            return True
-        command = password_commands[-1]
-        password = re.sub(r"^/password(?:@\w+)?\s+", "", command["text"], flags=re.I)
-        control["last_command_mid"] = command["mid"]
+        password = _consume_extract_password(settings)
+        if password is None:
+            if not batch.get("password_prompt_sent"):
+                await browser.send_text("This archive needs a password. Enter it privately in the server terminal with: papa-tdl extract-password")
+                batch["password_prompt_sent"] = True
+                _save_control(settings, control)
+            return False
+        batch["password_prompt_sent"] = False
+        _save_control(settings, control)
 
     extracted = root / "extracted"
     files = [incoming / batch["downloaded"][mid] for mid in batch["media"]]
     name = batch_folder_name(files, f"Telegram batch {batch['start_mid']}")
     signature = ",".join(batch["media"])
-    if batch.get("last_attempt_signature") == signature and not password:
-        return True
+    if batch.get("last_attempt_signature") == signature and not password and not batch.get("extraction_complete"):
+        return False
     missing = _missing_parts(files)
     if missing:
         batch["last_attempt_signature"] = signature
@@ -199,30 +263,50 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         _save_control(settings, control)
         await browser.send_text("Archive parts are missing: " + ", ".join(map(str, missing[:20])) +
                                 ". Send them and then /done.")
-        return True
-    try:
-        extract_archives(incoming, extracted, password, max_bytes=settings.max_download_bytes)
-    except PasswordRequired:
-        batch["awaiting_password"] = True
+        return False
+    if not batch.get("extraction_complete"):
+        try:
+            extract_archives(incoming, extracted, password, max_bytes=settings.max_download_bytes)
+        except PasswordRequired:
+            batch["awaiting_password"] = True
+            batch["password_prompt_sent"] = True
+            _save_control(settings, control)
+            await browser.send_text("This archive needs a password. Enter it privately in the server terminal with: papa-tdl extract-password")
+            return False
+        except InvalidArchivePassword:
+            batch["awaiting_password"] = True
+            batch["password_prompt_sent"] = True
+            _save_control(settings, control)
+            await browser.send_text("That password was incorrect. Enter the correct password in the server terminal with: papa-tdl extract-password")
+            return False
+        except StorageError as exc:
+            batch["last_attempt_signature"] = signature
+            batch["awaiting_more"] = True
+            _save_control(settings, control)
+            await browser.send_text(f"Extraction could not finish: {exc} The downloaded parts are retained; check papa-tdl logs and send /done to retry.")
+            return False
+        batch["extraction_complete"] = True
+        batch["awaiting_password"] = False
+        batch["password_prompt_sent"] = False
         _save_control(settings, control)
-        await browser.send_text("This archive is password protected. Send /password YOUR_PASSWORD in this private group.")
-        return True
-    except InvalidArchivePassword:
-        batch["awaiting_password"] = True
-        _save_control(settings, control)
-        await browser.send_text("That password was rejected. Send /password YOUR_PASSWORD again.")
-        return True
-    except StorageError as exc:
-        batch["last_attempt_signature"] = signature
-        batch["awaiting_more"] = True
-        _save_control(settings, control)
-        await browser.send_text(f"Extraction could not finish: {exc} Send any missing parts, then /done.")
-        return True
 
     batch_id = f"tg-{peer[1:]}-{batch['start_mid']}"
-    item = await asyncio.to_thread(storage.upload_tree, extracted, folder_id, batch_id, name)
+    if time.time() < float(batch.get("upload_retry_at", 0)):
+        return False
+    extracted_count = sum(1 for _ in extracted.rglob("*"))
+    try:
+        item = await asyncio.to_thread(storage.upload_tree, extracted, folder_id, batch_id, name)
+    except (StorageError, OSError) as exc:
+        failures = int(batch.get("upload_failures", 0)) + 1
+        batch["upload_failures"] = failures
+        batch["upload_retry_at"] = time.time() + min(300, 15 * (2 ** min(failures - 1, 5)))
+        _save_control(settings, control)
+        print(f"Archive extracted but saving failed ({failures} attempts): {exc}", flush=True)
+        if failures in {1, 3, 6}:
+            await browser.send_text("The archive was extracted, but saving it failed. The extracted files are retained and I will retry; check papa-tdl logs and free storage.")
+        return False
     destination = item.get("webViewLink") or item["id"]
-    await browser.send_text(f"Extraction complete: {name} ({len(list(extracted.rglob('*')))} items). Saved to {destination}")
+    await browser.send_text(f"Extraction complete: {name} ({extracted_count} items). Saved to {destination}")
     print(f"Batch saved: {name} | {destination}", flush=True)
     ignored = list(dict.fromkeys([*control.get("ignored_media", []), *batch["media"]]))
     control["ignored_media"] = ignored[-10000:]
@@ -381,8 +465,19 @@ async def watch(settings: Settings, *, selected_ids=None, once=False) -> None:
                 await browser.stop()
                 await asyncio.sleep(5)
                 continue
-            batch_mode = await _process_extract_commands(
-                settings, browser, storage, folder_id, peer, events)
+            try:
+                batch_mode = await _process_extract_commands(
+                    settings, browser, storage, folder_id, peer, events)
+            except (BrowserError, TelegramError, StorageError, OSError) as exc:
+                if once:
+                    raise
+                print(f"Archive watcher step failed; saved batch state will be retried: {exc}", flush=True)
+                if isinstance(exc, BrowserError):
+                    await browser.stop()
+                if await _pause_or_stop(settings):
+                    print("Watcher stopped by request.", flush=True)
+                    return
+                continue
             extract_control = _load_control(settings)
             ignored = set(extract_control.get("ignored_media", []))
             if extract_control.get("batch"):

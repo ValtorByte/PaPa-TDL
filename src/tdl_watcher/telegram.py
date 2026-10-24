@@ -291,8 +291,7 @@ class TelegramBrowser:
             if (!/^[1-9][0-9]{0,19}$/.test(mid || '')) continue;
             const body = bubble.querySelector('.translatable-message, .message, .bubble-content');
             const text = (body?.innerText || '').trim();
-            if (/^\/(extract|done)(?:@\w+)?\s*$/i.test(text) ||
-                /^\/password(?:@\w+)?\s+\S[\s\S]*$/i.test(text)) {
+            if (/^\/(extract|done)(?:@\w+)?\s*$/i.test(text)) {
               result.push({type: 'command', peer, mid, text});
             }
           }

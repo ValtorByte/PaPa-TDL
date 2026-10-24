@@ -160,7 +160,7 @@ Files are saved privately. The tool does not publish a web server or make local 
 
 Send ZIP, RAR or 7z archives to the configured private Telegram group. The watcher recognizes related volume names such as `.part1.rar`, `.part2.rar`, `.7z.001` and `.zip.001`. It also groups archives sent as one Telegram album. After no new part has arrived for 30 seconds, it downloads all parts, extracts them together and saves one folder inside `TDL`. Ordinary archives are extracted automatically too.
 
-For a custom batch, you can still send `/extract`, then the files, then `/done`. If a part is missing or extraction fails, the files stay in the private recovery area; send the missing file and `/done` to retry. If asked for a password, reply with `/password YOUR_PASSWORD`. A restart resumes the batch and skips already verified Drive files. The password is kept only in memory and is never written to PaPa-TDL logs or state. The `/password` message itself remains visible in Telegram history until you delete it; use a private group whose members you trust.
+For a custom batch, you can still send `/extract`, then the files, then `/done`. If a part is missing or extraction fails, the files stay in the private recovery area; send the missing file and `/done` to retry. For encrypted archives, run `papa-tdl extract-password` in a second server terminal and type the password at the hidden prompt. It is handed to the watcher through a one-time private file and removed immediately after use. Failed part downloads and storage uploads are retried while unrelated files continue to be watched. A restart resumes the batch and skips already verified Drive files.
 
 Archive extraction rejects traversal paths and symbolic links. The Ubuntu/Debian installer includes 7-Zip and installs RAR support when the distribution offers it. Manual installations need `unrar` or a RAR-capable 7-Zip package for RAR, and `7zz`, `7z` or `7za` for 7z and split archives.
 
@@ -204,7 +204,7 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.0`. A cached older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.1`. A cached older `main` script will still run the older installer.
 
 If the Playwright browser CDN returns a regional 403, the installer automatically uses an existing system browser or tries the official Chrome system package. The selected executable is saved in the launcher, so normal runs do not download a browser again.
 
@@ -215,7 +215,7 @@ If the Playwright browser CDN returns a regional 403, the installer automaticall
 | `papa-tdl: command not found` after a failed install | Finish installation successfully first. For a non-root install, also add `~/.local/bin` to PATH. |
 | `System has not been booted with systemd` | The native installer does not call systemctl. Use `papa-tdl start/stop/status` instead. |
 | Drive is not connected | Run `papa-tdl drive-login`, approve the browser link and wait for `Google Drive connected`; or select local in setup. |
-| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.6.0 and use papa-tdl drive-login. |
+| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.6.1 and use papa-tdl drive-login. |
 | No Google login URL appears | Check connectivity to the PaPa-TDL authentication service and retry. Users do not need an OAuth JSON for hosted sign-in. |
 | OAuth JSON cannot be read | Move it out of `/root` to the private data directory and assign it to the runtime user. |
 | Google approved, but the VPS times out | Keep drive-login running and use a fresh link if it expires. SSH forwarding is needed only for the optional --method browser flow. |
