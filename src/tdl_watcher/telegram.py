@@ -12,6 +12,7 @@ from pathlib import Path
 from playwright.async_api import Error as BrowserError, async_playwright
 
 from .config import Settings
+from .ui import ProgressBar
 
 
 WEB_URL = "https://web.telegram.org/k/"
@@ -262,7 +263,44 @@ class TelegramBrowser:
           return result;
         }""", peer)
 
-    async def download(self, spec: dict) -> Path:
+    async def visible_events(self, peer: str) -> list[dict]:
+        """Return visible media plus commands sent by the authenticated account."""
+        media = await self.visible_media(peer)
+        commands = await self.page.evaluate(r"""peer => {
+          const root = document.querySelector('#column-center');
+          if (!root) return [];
+          const result = [];
+          for (const bubble of root.querySelectorAll('.bubble[data-peer-id][data-mid]')) {
+            if (bubble.dataset.peerId !== peer || bubble.classList.contains('service')) continue;
+            const outgoing = bubble.classList.contains('is-out') ||
+              bubble.classList.contains('is-outgoing') || bubble.classList.contains('own');
+            if (!outgoing) continue;
+            const mid = bubble.dataset.mid;
+            if (!/^[1-9][0-9]{0,19}$/.test(mid || '')) continue;
+            const body = bubble.querySelector('.translatable-message, .message, .bubble-content');
+            const text = (body?.innerText || '').trim();
+            if (/^\/(extract|done)(?:@\w+)?\s*$/i.test(text) ||
+                /^\/password(?:@\w+)?\s+\S[\s\S]*$/i.test(text)) {
+              result.push({type: 'command', peer, mid, text});
+            }
+          }
+          return result;
+        }""", peer)
+        events = [{**item, "type": "media"} for item in media] + commands
+        return sorted(events, key=lambda item: int(item["mid"]))
+
+    async def send_text(self, text: str) -> None:
+        """Send a short status message to the currently open group."""
+        if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+            raise TelegramError("Invalid Telegram status message.")
+        composer = self.page.locator(
+            '#column-center .input-message-input:visible, #column-center [contenteditable="true"]:visible'
+        ).last
+        await composer.wait_for(state="visible", timeout=10000)
+        await composer.fill(text)
+        await composer.press("Enter")
+
+    async def download(self, spec: dict, destination: Path | None = None) -> Path:
         peer, mid, kind = (spec[k] for k in ("peer", "mid", "kind"))
         if not re.fullmatch(r"-[1-9][0-9]{0,16}", peer) or not re.fullmatch(r"[1-9][0-9]{0,19}", mid):
             raise TelegramError("Invalid Telegram message identity.")
@@ -282,10 +320,13 @@ class TelegramBrowser:
             raise TelegramError("Telegram media exceeds TDL_MAX_DOWNLOAD_BYTES.")
         if shutil.disk_usage(self.settings.data_dir).free < MIN_FREE_BYTES + int(estimate * 2.1):
             raise TelegramError("Insufficient local disk space for a browser download.")
-        destination = self.settings.pending_dir / f"{peer[1:]}_{mid}"
-        if destination.exists() and list(destination.iterdir()):
+        owns_destination = destination is None
+        destination = destination or self.settings.pending_dir / f"{peer[1:]}_{mid}"
+        if owns_destination and destination.exists() and list(destination.iterdir()):
             raise TelegramError("A pending local copy already exists for this message; retry its upload first.")
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = None
+        progress = ProgressBar("Telegram download", estimate or None)
         try:
             download_waiter = asyncio.create_task(self.page.wait_for_event("download", timeout=30 * 60 * 1000))
             await media.first.click(button="right")
@@ -296,9 +337,9 @@ class TelegramBrowser:
             if await choice.count() != 1 or "is-disabled" in (await choice.get_attribute("class") or ""):
                 raise TelegramError("Telegram Web does not offer an enabled Download action for this file.")
             await choice.click()
-            downloaded = await self._monitor(download_waiter, "Telegram Web preparation")
+            downloaded = await self._monitor(download_waiter, progress)
             path_waiter = asyncio.create_task(downloaded.path())
-            browser_path = await self._monitor(path_waiter, "Browser download")
+            browser_path = await self._monitor(path_waiter, progress)
             if await downloaded.failure() or not browser_path:
                 raise TelegramError("Telegram Web did not complete the file download.")
             browser_path = Path(browser_path)
@@ -310,11 +351,19 @@ class TelegramBrowser:
             if filename in {"upload.json", "upload.json.tmp", "source.json", "source.tmp", "payload.part"}:
                 filename = "file_" + filename
             path = destination / filename
+            if path.exists():
+                raise TelegramError("A file with the same name is already present in this extraction batch.")
             shutil.move(str(browser_path), str(path))
-            print(f"Telegram download completed: {path.name} ({path.stat().st_size} bytes).", flush=True)
+            progress.update(path.stat().st_size, total=path.stat().st_size)
+            progress.finish(f"{path.name} ready")
+            print(f"Downloaded: {path.name} ({path.stat().st_size} bytes).", flush=True)
             return path
         except BaseException:
-            shutil.rmtree(destination, ignore_errors=True)
+            progress.finish("failed; retry is safe", success=False)
+            if owns_destination:
+                shutil.rmtree(destination, ignore_errors=True)
+            elif path is not None:
+                path.unlink(missing_ok=True)
             raise
         finally:
             if "download_waiter" in locals() and not download_waiter.done():
@@ -324,7 +373,7 @@ class TelegramBrowser:
                 path_waiter.cancel()
                 await asyncio.gather(path_waiter, return_exceptions=True)
 
-    async def _monitor(self, future: asyncio.Task, stage: str):
+    async def _monitor(self, future: asyncio.Task, progress: ProgressBar):
         while not future.done():
             if shutil.disk_usage(self.settings.data_dir).free < MIN_FREE_BYTES:
                 raise TelegramError("Local disk space ran low during the Telegram download.")
@@ -337,6 +386,7 @@ class TelegramBrowser:
                     pass
             if self.settings.max_download_bytes and total > self.settings.max_download_bytes:
                 raise TelegramError("Telegram download exceeded TDL_MAX_DOWNLOAD_BYTES.")
-            print(f"{stage}: {total / 1024**2:.1f} MiB on disk", flush=True)
+            progress.update(total)
             await asyncio.wait([future], timeout=5)
-        return await future
+        result = await future
+        return result

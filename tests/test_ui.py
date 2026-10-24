@@ -1,7 +1,7 @@
 import os
 import unittest
 from unittest.mock import Mock, patch
-from tdl_watcher.ui import color
+from tdl_watcher.ui import ProgressBar, color, status
 
 
 class TerminalTests(unittest.TestCase):
@@ -18,3 +18,21 @@ class TerminalTests(unittest.TestCase):
         terminal.isatty.return_value = True
         with patch.dict(os.environ, {'NO_COLOR': '1'}):
             self.assertEqual(color('PaPa-TDL', stream=terminal), 'PaPa-TDL')
+
+    def test_progress_rewrites_one_terminal_line(self):
+        stream = Mock()
+        stream.isatty.return_value = True
+        with patch.dict(os.environ, {'TERM': 'xterm', 'NO_COLOR': '1'}, clear=True):
+            progress = ProgressBar('Download', 100, stream=stream, width=10)
+            progress.update(25)
+            progress.update(50)
+            progress.finish('ready')
+        rendered = ''.join(call.args[0] for call in stream.write.call_args_list)
+        self.assertIn('\rDownload', rendered)
+        self.assertIn('50.0%', rendered)
+        self.assertEqual(rendered.count('\n'), 1)  # Only the final completion line advances.
+
+    def test_status_has_text_as_well_as_color(self):
+        with patch.dict(os.environ, {'NO_COLOR': '1'}):
+            self.assertIn('connected', status(True))
+            self.assertIn('not connected', status(False))

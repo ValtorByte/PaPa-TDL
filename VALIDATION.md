@@ -1,4 +1,4 @@
-# PaPa-TDL 1.3.2 validation
+# PaPa-TDL 1.5.0 validation
 
 Validated locally on Linux with CPython 3.12.15. The user-facing validation date is 2026-10-23 (Asia/Tehran).
 
@@ -10,7 +10,9 @@ Validated locally on Linux with CPython 3.12.15. The user-facing validation date
 - Phone entry uses a visible prompt, accepts international and Iranian mobile formats, and keeps code/password prompts hidden. The terminal banner uses ANSI Shadow with a narrow-terminal fallback.
 - The dimensional SVG wordmark was rendered in Chromium and visually inspected.
 
-- 62 automated tests: `PAPA_TDL_BROWSER_TEST=1 python -m unittest discover -s tests -v`.
+- 78 automated tests: `python -m unittest discover -s tests -q` (two opt-in environment tests skipped).
+- Extraction batches: explicit `/extract` → files → `/done` control flow, restart-safe state, multipart naming, one-folder local publication, duplicate batch reuse, ZIP extraction, traversal rejection, password-required/wrong-password states, and no password in stored state or errors.
+- Terminal feedback: single-line in-place progress on a TTY, log throttling when redirected, semantic cyan/green/yellow/red states, text markers alongside color, and connected-account badges.
 - Real Chromium: a controlled local Telegram-like HTML fixture, rendered-media discovery, native browser download event, complete file bytes and private pending path. No Telegram account was used by this fixture.
 - Real CLI subprocesses: local setup with a custom absolute output directory, streaming direct-file download, repeated-source skip and final file content.
 - Real Linux background processes: start/status/logs/stop without systemd or Docker, saved output settings, portable profile locking, graceful stop requests, browser cleanup and protection against signaling an unrelated PID.
@@ -26,7 +28,7 @@ Validated locally on Linux with CPython 3.12.15. The user-facing validation date
 
 ## Not performed
 
-- Login to the user's Telegram account, real private/group media transfers or a live Google consent/upload.
+- A live Telegram `/extract` batch with real multipart RAR data. Google hosted consent, Drive API listing and private `TDL` folder creation were verified separately on hunt; a real extracted tree upload was not performed.
 - An actual apt/Chromium dependency installation on a clean VPS; native installer package installation was stubbed for its orchestration tests.
 - Docker image build/run or a GitHub Actions run. Docker remains optional.
 - Publishing or pushing changes to GitHub.

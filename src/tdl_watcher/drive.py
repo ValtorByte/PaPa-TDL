@@ -23,6 +23,8 @@ from googleapiclient.http import MediaFileUpload
 from .common import CHUNK_SIZE, StorageError, remote_name, source_prefix, md5_file
 from .config import private_json
 from .oauth_config import resolve_desktop_config
+from .telegram import safe_filename
+from .ui import ProgressBar
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
@@ -236,7 +238,7 @@ class DriveClient:
         for _ in range(1000):
             result = self._execute(self.api.files().list(
                 q=query, spaces="drive", pageSize=100, pageToken=token,
-                fields="nextPageToken,files(id,name,size,mimeType,trashed,md5Checksum)",
+                fields="nextPageToken,files(id,name,size,mimeType,trashed,md5Checksum,appProperties,webViewLink)",
                 supportsAllDrives=True, includeItemsFromAllDrives=True))
             files.extend(result.get("files", []))
             token = result.get("nextPageToken")
@@ -295,13 +297,15 @@ class DriveClient:
                                 "application/octet-stream", chunksize=CHUNK_SIZE, resumable=True)
         request = self.api.files().create(body={"id": file_id, "name": remote_name(peer, mid, path.name),
             "parents": [folder_id]}, media_body=media, fields="id,name,size,md5Checksum", supportsAllDrives=True)
+        bar = ProgressBar("Drive upload", size)
         try:
             result = None
             while result is None:
                 progress, result = request.next_chunk(num_retries=4)
                 if progress:
-                    print(f"Google Drive upload: {progress.progress():.1%}", flush=True)
+                    bar.update(round(progress.progress() * size))
         except Exception:
+            bar.finish("interrupted; local copy retained", success=False)
             raise StorageError("Google upload interrupted; local copy retained. Retry the command.") from None
         verified = self._execute(self.api.files().get(fileId=result["id"], fields="id,name,size,md5Checksum",
                                                     supportsAllDrives=True))
@@ -309,5 +313,109 @@ class DriveClient:
             raise StorageError("Google Drive size verification failed; local copy retained.")
         if verified.get("md5Checksum") != local_md5:
             raise StorageError("Google Drive checksum verification failed; local copy retained.")
-        print("Google Drive upload: 100% — size and MD5 verified.", flush=True)
+        bar.update(size)
+        bar.finish("size and MD5 verified")
         return verified
+
+    @staticmethod
+    def _q(value):
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+    def find_batch(self, folder_id, batch_id):
+        key = self._q(batch_id)
+        matches = self._list(f"'{folder_id}' in parents and trashed = false and "
+                             "mimeType = 'application/vnd.google-apps.folder' and "
+                             f"appProperties has {{ key='papaTdlBatch' and value='{key}' }}")
+        if len(matches) > 1:
+            raise StorageError("Multiple Drive folders match this extraction batch.")
+        return matches[0] if matches else None
+
+    def _child_folder(self, parent_id, name):
+        escaped = self._q(name)
+        matches = self._list(f"'{parent_id}' in parents and trashed = false and "
+                             "mimeType = 'application/vnd.google-apps.folder' and "
+                             f"name = '{escaped}'")
+        if len(matches) > 1:
+            raise StorageError("Multiple Drive folders have the same extracted path.")
+        if matches:
+            return matches[0]["id"]
+        return self._execute(self.api.files().create(
+            body={"name": name, "parents": [parent_id],
+                  "mimeType": "application/vnd.google-apps.folder"},
+            fields="id", supportsAllDrives=True))["id"]
+
+    def _upload_named(self, path, parent_id, name, bar, completed, total):
+        escaped = self._q(name)
+        matches = self._list(f"'{parent_id}' in parents and trashed = false and "
+                             "mimeType != 'application/vnd.google-apps.folder' and "
+                             f"name = '{escaped}'")
+        checksum = md5_file(path)
+        if len(matches) > 1:
+            raise StorageError("Multiple Drive files have the same extracted path.")
+        if matches:
+            item = matches[0]
+            if int(item.get("size", -1)) != path.stat().st_size or item.get("md5Checksum") != checksum:
+                raise StorageError("An existing Drive batch file differs from the extracted source.")
+            bar.update(completed + path.stat().st_size, total=total, detail=name)
+            return item
+        media = MediaFileUpload(str(path), mimetype=mimetypes.guess_type(name)[0] or
+                                "application/octet-stream", chunksize=CHUNK_SIZE, resumable=True)
+        request = self.api.files().create(body={"name": name, "parents": [parent_id]},
+            media_body=media, fields="id,name,size,md5Checksum", supportsAllDrives=True)
+        try:
+            result = None
+            while result is None:
+                progress, result = request.next_chunk(num_retries=4)
+                if progress:
+                    bar.update(completed + round(progress.progress() * path.stat().st_size),
+                               total=total, detail=name)
+        except Exception:
+            raise StorageError("Google batch upload was interrupted; extracted files were retained.") from None
+        verified = self._execute(self.api.files().get(
+            fileId=result["id"], fields="id,name,size,md5Checksum", supportsAllDrives=True))
+        if int(verified.get("size", -1)) != path.stat().st_size or verified.get("md5Checksum") != checksum:
+            raise StorageError("Google batch file verification failed; extracted files were retained.")
+        return verified
+
+    def upload_tree(self, source, folder_id, batch_id, folder_name):
+        source = Path(source)
+        files = sorted(item for item in source.rglob("*") if item.is_file() and not item.is_symlink())
+        if not files or any(item.is_symlink() for item in source.rglob("*")):
+            raise StorageError("Extracted folder is empty or contains an unsafe link.")
+        batch = self.find_batch(folder_id, batch_id)
+        if batch and batch.get("appProperties", {}).get("papaTdlComplete") == "1":
+            return batch
+        if not batch:
+            batch = self._execute(self.api.files().create(body={
+                "name": safe_filename(folder_name, "extracted"), "parents": [folder_id],
+                "mimeType": "application/vnd.google-apps.folder",
+                "appProperties": {"papaTdlBatch": batch_id, "papaTdlComplete": "0"}},
+                fields="id,name,mimeType,appProperties,webViewLink", supportsAllDrives=True))
+        directories = {Path("."): batch["id"]}
+        total = sum(path.stat().st_size for path in files)
+        completed = 0
+        bar = ProgressBar("Drive batch upload", total)
+        try:
+            for path in files:
+                relative = path.relative_to(source)
+                parent_relative = Path(".")
+                parent_id = batch["id"]
+                for part in relative.parent.parts:
+                    if part == ".":
+                        continue
+                    parent_relative = parent_relative / part
+                    if parent_relative not in directories:
+                        directories[parent_relative] = self._child_folder(parent_id, part)
+                    parent_id = directories[parent_relative]
+                self._upload_named(path, parent_id, relative.name, bar, completed, total)
+                completed += path.stat().st_size
+                bar.update(completed, detail=str(relative))
+            batch = self._execute(self.api.files().update(fileId=batch["id"],
+                body={"appProperties": {"papaTdlBatch": batch_id, "papaTdlComplete": "1"}},
+                fields="id,name,mimeType,appProperties,webViewLink", supportsAllDrives=True))
+            batch["size"] = total
+            bar.finish(f"{len(files)} files verified")
+            return batch
+        except BaseException:
+            bar.finish("interrupted; extracted files retained", success=False)
+            raise

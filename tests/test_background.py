@@ -34,7 +34,7 @@ class Browser:
     async def stop(self): Path(os.environ['TEST_STOP_MARKER']).write_text('closed')
     async def logged_in(self): return True
     async def find_group(self): return '-123'
-    async def visible_media(self, peer): return []
+    async def visible_events(self, peer): return []
 service.TelegramBrowser = Browser
 ''')
         self.env = dict(os.environ, TDL_DATA_DIR=str(self.data), TDL_DESTINATION='local',

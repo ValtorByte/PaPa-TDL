@@ -4,9 +4,11 @@ import errno
 import os
 import shutil
 import tempfile
+import json
 from pathlib import Path
 
 from .common import StorageError, remote_name, source_prefix
+from .telegram import safe_filename
 
 
 class LocalClient:
@@ -72,6 +74,53 @@ class LocalClient:
         item = self.find_message(folder_id, peer, mid)
         if item is None or int(item["size"]) != path.stat().st_size:
             raise StorageError("Local save verification failed; pending file retained.")
+        return item
+
+    def find_batch(self, folder_id, batch_id):
+        if Path(folder_id).resolve() != self.root:
+            raise StorageError("The selected local destination changed.")
+        matches = []
+        for path in self.root.iterdir() if self.root.exists() else ():
+            marker = path / ".papa-tdl-batch.json"
+            if not path.is_symlink() and path.is_dir() and marker.is_file():
+                try:
+                    if json.loads(marker.read_text()).get("batch_id") == batch_id:
+                        matches.append(path)
+                except (OSError, ValueError, AttributeError):
+                    continue
+        if len(matches) > 1:
+            raise StorageError("Multiple local folders match this extraction batch.")
+        if not matches:
+            return None
+        total = sum(item.stat().st_size for item in matches[0].rglob("*") if item.is_file())
+        return {"id": str(matches[0]), "name": matches[0].name, "size": total,
+                "webViewLink": None}
+
+    def upload_tree(self, source, folder_id, batch_id, folder_name):
+        existing = self.find_batch(folder_id, batch_id)
+        if existing:
+            return existing
+        source = Path(source)
+        files = [item for item in source.rglob("*") if item.is_file() and not item.is_symlink()]
+        if not files or any(item.is_symlink() for item in source.rglob("*")):
+            raise StorageError("Extracted folder is empty or contains an unsafe link.")
+        name = safe_filename(folder_name, "extracted")
+        destination = self.root / name
+        if destination.exists():
+            destination = self.root / f"{name} [{batch_id[-8:]}]"
+        temporary = Path(tempfile.mkdtemp(prefix=".papa-tdl-batch-", dir=self.root))
+        try:
+            payload = temporary / "payload"
+            shutil.copytree(source, payload)
+            marker = payload / ".papa-tdl-batch.json"
+            marker.write_text(json.dumps({"batch_id": batch_id}, separators=(",", ":")))
+            marker.chmod(0o600)
+            os.replace(payload, destination)
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+        item = self.find_batch(folder_id, batch_id)
+        if item is None:
+            raise StorageError("Local extracted-folder verification failed; source retained.")
         return item
 
 

@@ -11,12 +11,151 @@ from pathlib import Path
 from playwright.async_api import Error as BrowserError
 
 from .config import Settings
+from .config import private_json
 from .common import StorageError
+from .extract import (InvalidArchivePassword, PasswordRequired, batch_folder_name,
+                      extract_archives)
 from .storage import make_storage
 from .telegram import TelegramBrowser, TelegramError, safe_filename
 
 
 PENDING_RE = re.compile(r"^([1-9][0-9]{0,16})_([1-9][0-9]{0,19})$")
+CONTROL_FILE = "extract-control.json"
+
+
+def _control_path(settings):
+    return settings.data_dir / CONTROL_FILE
+
+
+def _load_control(settings):
+    try:
+        value = json.loads(_control_path(settings).read_text())
+        if not isinstance(value, dict) or not isinstance(value.get("last_command_mid", "0"), str):
+            raise ValueError
+        return value
+    except FileNotFoundError:
+        return {"last_command_mid": "0", "batch": None, "ignored_media": []}
+    except (OSError, ValueError, AttributeError):
+        raise StorageError("The extraction control state is damaged; inspect extract-control.json.") from None
+
+
+def _save_control(settings, control):
+    private_json(_control_path(settings), json.dumps(control, separators=(",", ":")))
+
+
+def _batch_root(settings, batch):
+    return settings.data_dir / "extract-batches" / f"{batch['peer'][1:]}_{batch['start_mid']}"
+
+
+async def _process_extract_commands(settings, browser, storage, folder_id, peer, events):
+    """Advance one explicit /extract batch. Returns True while batch mode owns the loop."""
+    control = _load_control(settings)
+    batch = control.get("batch")
+    commands = [event for event in events if event["type"] == "command"]
+    media = [event for event in events if event["type"] == "media"]
+
+    if not batch:
+        starts = [event for event in commands if int(event["mid"]) > int(control["last_command_mid"])
+                  and re.fullmatch(r"/extract(?:@\w+)?", event["text"], re.I)]
+        if not starts:
+            return False
+        start = starts[-1]
+        batch = {"peer": peer, "start_mid": start["mid"], "done_mid": None,
+                 "media": [], "downloaded": {}, "awaiting_password": False,
+                 "destination": settings.destination}
+        control["batch"] = batch
+        control["last_command_mid"] = start["mid"]
+        _save_control(settings, control)
+        await browser.send_text("Extraction batch opened. Send all ZIP/RAR/7z parts, then send /done.")
+
+    if batch.get("peer") != peer:
+        raise StorageError("An extraction batch belongs to another Telegram group; finish it before changing groups.")
+    if batch.get("destination") != settings.destination:
+        raise StorageError("The extraction destination changed mid-batch; restore it or finish the saved batch first.")
+
+    done_candidates = [event for event in commands
+                       if int(event["mid"]) > int(batch["start_mid"])
+                       and re.fullmatch(r"/done(?:@\w+)?", event["text"], re.I)]
+    if not batch.get("done_mid") and done_candidates:
+        batch["done_mid"] = done_candidates[0]["mid"]
+        control["last_command_mid"] = batch["done_mid"]
+
+    upper = int(batch["done_mid"]) if batch.get("done_mid") else None
+    known = set(batch["media"])
+    for event in media:
+        mid = int(event["mid"])
+        if mid > int(batch["start_mid"]) and (upper is None or mid < upper) and event["mid"] not in known:
+            batch["media"].append(event["mid"])
+            known.add(event["mid"])
+    batch["media"].sort(key=int)
+    _save_control(settings, control)
+
+    root = _batch_root(settings, batch)
+    incoming = root / "archives"
+    incoming.mkdir(parents=True, exist_ok=True, mode=0o700)
+    specs = {event["mid"]: event for event in media}
+    for mid in batch["media"]:
+        if mid in batch["downloaded"]:
+            continue
+        spec = specs.get(mid)
+        if not spec:
+            if batch.get("done_mid"):
+                raise TelegramError(f"Batch file message {mid} is no longer visible; scroll to it and retry.")
+            return True
+        print(f"Batch download: Telegram message {mid}", flush=True)
+        path = await browser.download(spec, destination=incoming)
+        batch["downloaded"][mid] = path.name
+        _save_control(settings, control)
+        return True  # Telegram's rendered message list may have changed.
+
+    if not batch.get("done_mid"):
+        return True
+    if not batch["media"]:
+        await browser.send_text("No archive files were found between /extract and /done. Send /extract to start again.")
+        control["batch"] = None
+        _save_control(settings, control)
+        shutil.rmtree(root, ignore_errors=True)
+        return True
+
+    password = None
+    password_commands = [event for event in commands
+                         if int(event["mid"]) > int(batch["done_mid"])
+                         and int(event["mid"]) > int(control["last_command_mid"])
+                         and re.match(r"^/password(?:@\w+)?\s+", event["text"], re.I)]
+    if batch.get("awaiting_password"):
+        if not password_commands:
+            return True
+        command = password_commands[-1]
+        password = re.sub(r"^/password(?:@\w+)?\s+", "", command["text"], flags=re.I)
+        control["last_command_mid"] = command["mid"]
+
+    extracted = root / "extracted"
+    files = [incoming / batch["downloaded"][mid] for mid in batch["media"]]
+    name = batch_folder_name(files, f"Telegram batch {batch['start_mid']}")
+    try:
+        extract_archives(incoming, extracted, password, max_bytes=settings.max_download_bytes)
+    except PasswordRequired:
+        batch["awaiting_password"] = True
+        _save_control(settings, control)
+        await browser.send_text("This archive is password protected. Send /password YOUR_PASSWORD in this private group.")
+        return True
+    except InvalidArchivePassword:
+        batch["awaiting_password"] = True
+        _save_control(settings, control)
+        await browser.send_text("That password was rejected. Send /password YOUR_PASSWORD again.")
+        return True
+
+    batch_id = f"tg-{peer[1:]}-{batch['start_mid']}"
+    item = await asyncio.to_thread(storage.upload_tree, extracted, folder_id, batch_id, name)
+    destination = item.get("webViewLink") or item["id"]
+    await browser.send_text(f"Extraction complete: {name} ({len(list(extracted.rglob('*')))} items). Saved to {destination}")
+    print(f"Batch saved: {name} | {destination}", flush=True)
+    ignored = list(dict.fromkeys([*control.get("ignored_media", []), *batch["media"]]))
+    control["ignored_media"] = ignored[-10000:]
+    control["batch"] = None
+    _save_control(settings, control)
+    shutil.rmtree(root, ignore_errors=True)
+    return True
 
 
 def _stop_requested(settings: Settings) -> bool:
@@ -156,13 +295,26 @@ async def watch(settings: Settings, *, selected_ids=None, once=False) -> None:
                 await asyncio.sleep(30)
                 continue
             try:
-                specs = await browser.visible_media(peer)
+                events = await browser.visible_events(peer)
             except BrowserError:
                 if once:
                     raise TelegramError("Telegram browser disconnected; retry the command.") from None
                 await browser.stop()
                 await asyncio.sleep(5)
                 continue
+            batch_mode = await _process_extract_commands(
+                settings, browser, storage, folder_id, peer, events)
+            extract_control = _load_control(settings)
+            ignored = set(extract_control.get("ignored_media", []))
+            if extract_control.get("batch"):
+                ignored.update(extract_control["batch"].get("media", []))
+            completed.update((peer, mid) for mid in ignored)
+            if batch_mode:
+                if await _pause_or_stop(settings):
+                    print("Watcher stopped by request.", flush=True)
+                    return
+                continue
+            specs = [event for event in events if event["type"] == "media"]
             for spec in specs:
                 mid = spec["mid"]
                 if selected_ids and mid not in selected_ids:

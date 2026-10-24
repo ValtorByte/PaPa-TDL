@@ -13,6 +13,7 @@ import requests
 
 from .common import StorageError
 from .telegram import MIN_FREE_BYTES, safe_filename
+from .ui import ProgressBar
 
 RESERVED = {"upload.json", "upload.json.tmp", "source.json", "source.tmp", "payload.part"}
 
@@ -41,6 +42,7 @@ def download_url(settings, url, *, session=None):
             raise StorageError("The saved download does not match its metadata.")
         return path
     client = session or requests.Session()
+    progress = None
     try:
         for attempt in range(4):
             offset = partial.stat().st_size if partial.exists() else 0
@@ -86,7 +88,10 @@ def download_url(settings, url, *, session=None):
                     validator = etag if etag and not etag.startswith("W/") else response.headers.get("Last-Modified")
                     state = {"name": name, "validator": validator, "complete": False}
                     _save(metadata, state)
-                    received, last = offset, 0
+                    received = offset
+                    if progress is None:
+                        progress = ProgressBar("Direct download", total or None)
+                    progress.update(received, total=total or None)
                     with partial.open("ab" if offset else "wb") as stream:
                         partial.chmod(0o600)
                         for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -98,19 +103,19 @@ def download_url(settings, url, *, session=None):
                                 raise StorageError("Disk space ran low; partial download retained.")
                             stream.write(chunk)
                             received += len(chunk)
-                            if time.monotonic() - last >= 2:
-                                suffix = f" / {total / 1024**2:.1f} MiB" if total else " MiB"
-                                print(f"Downloading: {received / 1024**2:.1f}" + suffix, flush=True)
-                                last = time.monotonic()
+                            progress.update(received, total=total or None)
                     if received == 0 or (total and received != total):
                         raise requests.ConnectionError("Incomplete response")
                     # The queue is uploadable only once the final file and metadata exist.
                     state.update(complete=True, size=received)
                     partial.replace(folder / name)
                     _save(metadata, state)
+                    progress.finish(f"{name} ready")
                     return folder / name
             except requests.RequestException:
                 if attempt == 3:
+                    if progress:
+                        progress.finish("interrupted; partial file retained", success=False)
                     raise StorageError("Download interrupted after four attempts; partial file retained.") from None
                 time.sleep(min(2 ** attempt, 8))
         raise StorageError("Could not recover the direct download; rerun the command.")

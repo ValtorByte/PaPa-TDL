@@ -190,7 +190,7 @@ class TransferTests(unittest.TestCase):
         browser.stop = AsyncMock()
         browser.find_group = AsyncMock(return_value='-123')
         browser.logged_in = AsyncMock(return_value=True)
-        browser.visible_media = AsyncMock(return_value=[{'mid': '77', 'peer': '-123', 'kind': 'bubble'}])
+        browser.visible_events = AsyncMock(return_value=[{'mid': '77', 'peer': '-123', 'kind': 'bubble', 'type': 'media'}])
         with patch('tdl_watcher.service.TelegramBrowser', return_value=browser):
             with self.assertRaisesRegex(Exception, '88'):
                 asyncio.run(watch(self.settings, selected_ids={'88'}, once=True))

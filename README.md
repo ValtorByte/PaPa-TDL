@@ -43,6 +43,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
 python -m playwright install chromium
+# For RAR/7z batches, install 7-Zip with your OS package manager.
 python -m tdl_watcher
 ```
 
@@ -155,6 +156,19 @@ Files are saved privately. The tool does not publish a web server or make local 
 
 ## Commands
 
+### Extract multipart archives from Telegram
+
+In the configured private Telegram group, send these in order:
+
+1. Send `/extract`.
+2. Send every related ZIP, RAR or 7z file/volume. Multipart names such as `.part1.rar`, `.part2.rar`, `.7z.001` and `.zip.001` are grouped together.
+3. Send `/done`.
+4. If the archive is encrypted, PaPa-TDL asks for a password. Reply with `/password YOUR_PASSWORD`.
+
+The watcher downloads the whole batch, extracts all first volumes together, and saves the resulting tree as one folder inside `TDL`. Originals remain in the private recovery area until extraction and destination verification succeed. A restart resumes the batch and skips already verified Drive files. The password is kept only in memory and is never written to PaPa-TDL logs or state. Because the `/password` message itself is visible in Telegram, use this only in a private group whose members you trust, then delete that Telegram message if you do not want it retained in chat history.
+
+Archive extraction rejects traversal paths and symbolic links. The native Ubuntu/Debian installer includes 7-Zip; manual installations need `7zz`, `7z`, or `7za` for RAR/7z and split archives.
+
 | Command | Action |
 | --- | --- |
 | `papa-tdl` | Open the menu; run the wizard if no settings exist |
@@ -195,7 +209,7 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.4.0`. A cached older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.5.0`. A cached older `main` script will still run the older installer.
 
 | Symptom | What to do |
 | --- | --- |
@@ -204,7 +218,7 @@ If you use the remote one-command installer, first publish the new source to Git
 | `papa-tdl: command not found` after a failed install | Finish installation successfully first. For a non-root install, also add `~/.local/bin` to PATH. |
 | `System has not been booted with systemd` | The native installer does not call systemctl. Use `papa-tdl start/stop/status` instead. |
 | Drive is not connected | Run `papa-tdl drive-login`, approve the browser link and wait for `Google Drive connected`; or select local in setup. |
-| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.4.0 and use papa-tdl drive-login. |
+| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.5.0 and use papa-tdl drive-login. |
 | No Google login URL appears | Check connectivity to the PaPa-TDL authentication service and retry. Users do not need an OAuth JSON for hosted sign-in. |
 | OAuth JSON cannot be read | Move it out of `/root` to the private data directory and assign it to the runtime user. |
 | Google approved, but the VPS times out | Keep drive-login running and use a fresh link if it expires. SSH forwarding is needed only for the optional --method browser flow. |
