@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 
 from .common import StorageError
 from .telegram import safe_filename
@@ -25,6 +26,15 @@ class InvalidArchivePassword(StorageError):
 
 PART_RE = re.compile(r"(?i)(?:\.part0*([0-9]+)\.rar|\.([rz])([0-9]{2})|\.(zip|7z)\.0*([0-9]+))$")
 ARCHIVE_RE = re.compile(r"(?i)(?:\.zip|\.rar|\.7z|\.tar|\.tar\.(?:gz|bz2|xz)|\.tgz|\.tbz2|\.txz)$")
+
+
+def _safe_member(name: str) -> bool:
+    normalized = name.replace("\\", "/")
+    posix = PurePosixPath(normalized)
+    windows = PureWindowsPath(name)
+    return (bool(name) and not posix.is_absolute() and not windows.is_absolute()
+            and ".." not in posix.parts and not windows.drive
+            and "\x00" not in name)
 
 
 def _is_first_volume(path: Path) -> bool:
@@ -82,12 +92,17 @@ def _extract_zip(archive: Path, output: Path, password: str | None, limit: int) 
     try:
         with zipfile.ZipFile(archive) as handle:
             members = handle.infolist()
+            supported = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED,
+                         zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA}
+            if any(member.compress_type not in supported for member in members):
+                _extract_7z(archive, output, password, limit)
+                return
             expanded = sum(member.file_size for member in members)
             if expanded > limit:
                 raise StorageError("Extracted data would exceed the available storage limit.")
             for member in members:
                 member_path = Path(member.filename)
-                if member_path.is_absolute() or ".." in member_path.parts:
+                if not _safe_member(member.filename):
                     raise StorageError("Archive contains an unsafe path; extraction was stopped.")
                 if member.is_dir():
                     (output / member_path).mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -135,10 +150,43 @@ def _seven_zip_error(result: subprocess.CompletedProcess, password: str | None) 
     raise StorageError("Archive extraction failed; verify that every volume is present and undamaged.")
 
 
+def _run_unrar(arguments: list[str], password: str | None) -> subprocess.CompletedProcess:
+    return subprocess.run(["unrar", *arguments], input=(password or "") + "\n", text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=24 * 60 * 60,
+                          env={**os.environ, "LANG": "C", "LC_ALL": "C"})
+
+
+def _unrar_error(result: subprocess.CompletedProcess, password: str | None) -> None:
+    if result.returncode == 0:
+        return
+    output = result.stdout.lower()
+    if "password" in output or "encrypted" in output:
+        if password:
+            raise InvalidArchivePassword("The archive password was rejected.")
+        raise PasswordRequired("This extraction batch requires a password.")
+    raise StorageError("RAR extraction failed; verify that every volume is present and undamaged.")
+
+
+def _extract_rar(archive: Path, output: Path, password: str | None, limit: int) -> None:
+    listing = _run_unrar(["lt", "-c-", str(archive)], password)
+    _unrar_error(listing, password)
+    members = re.findall(r"(?m)^\s*Name:\s*(.+)$", listing.stdout)
+    sizes = [int(value) for value in re.findall(r"(?m)^\s*Size:\s*([0-9]+)$", listing.stdout)]
+    if not members or any(not _safe_member(name) for name in members):
+        raise StorageError("RAR contains an unsafe or empty path; extraction was stopped.")
+    if sum(sizes) > limit:
+        raise StorageError("Extracted data would exceed the available storage limit.")
+    result = _run_unrar(["x", "-y", "-idq", "-c-", str(archive), str(output) + os.sep], password)
+    _unrar_error(result, password)
+
+
 def _extract_7z(archive: Path, output: Path, password: str | None, limit: int) -> None:
     listing = _run_7z(["l", "-slt", "--", str(archive)], password)
     _seven_zip_error(listing, password)
     sizes = [int(value) for value in re.findall(r"(?m)^Size = ([0-9]+)$", listing.stdout)]
+    members = re.findall(r"(?m)^Path = (.+)$", listing.stdout.split("----------", 1)[-1])
+    if not members or any(not _safe_member(name) for name in members):
+        raise StorageError("Archive contains an unsafe or empty path; extraction was stopped.")
     if sum(sizes) > limit:
         raise StorageError("Extracted data would exceed the available storage limit.")
     result = _run_7z(["x", "-y", f"-o{output}", "--", str(archive)], password)
@@ -166,6 +214,8 @@ def extract_archives(source: Path, destination: Path, password: str | None = Non
                 ordinary_zip = archive.suffix.lower() == ".zip" and not re.search(r"(?i)\.zip\.0*1$", archive.name)
                 if ordinary_zip:
                     _extract_zip(archive, output, password, limit)
+                elif archive.name.lower().endswith(".rar") and shutil.which("unrar"):
+                    _extract_rar(archive, output, password, limit)
                 else:
                     _extract_7z(archive, output, password, limit)
                 _validate_tree(output)

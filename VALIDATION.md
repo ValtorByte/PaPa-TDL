@@ -1,4 +1,4 @@
-# PaPa-TDL 1.5.1 validation
+# PaPa-TDL 1.6.0 validation
 
 Validated locally on Linux with CPython 3.12.15. The user-facing validation date is 2026-10-23 (Asia/Tehran).
 
@@ -10,8 +10,11 @@ Validated locally on Linux with CPython 3.12.15. The user-facing validation date
 - Phone entry uses a visible prompt, accepts international and Iranian mobile formats, and keeps code/password prompts hidden. The terminal banner uses ANSI Shadow with a narrow-terminal fallback.
 - The dimensional SVG wordmark was rendered in Chromium and visually inspected.
 
-- 78 automated tests: `python -m unittest discover -s tests -q` (two opt-in environment tests skipped).
-- Extraction batches: explicit `/extract` → files → `/done` control flow, restart-safe state, multipart naming, one-folder local publication, duplicate batch reuse, ZIP extraction, traversal rejection, password-required/wrong-password states, and no password in stored state or errors.
+- 82 automated tests: `python -m unittest discover -s tests -q` (two opt-in environment tests skipped).
+- Extraction batches: automatic multipart and Telegram-album grouping, optional `/extract` → files → `/done` control flow, missing-part recovery, restart-safe state, one-folder local publication, duplicate batch reuse, ZIP extraction, traversal rejection, password-required/wrong-password states, and no password in stored state or errors.
+- Real seven-volume encrypted RAR archive: missing password was detected, then all seven volumes were extracted with the correct password and the payload bytes matched. The RAR creator binary was obtained temporarily for this local test; no external service or Telegram account was involved.
+- Real encrypted split 7z archive: password detection and extraction with a complete byte-for-byte payload check passed using a temporary Ubuntu 7-Zip package.
+- Real Chromium static fixture: archive media and command DOM detection plus locating an older rendered item were verified.
 - Terminal feedback: single-line in-place progress on a TTY, log throttling when redirected, semantic cyan/green/yellow/red states, text markers alongside color, and connected-account badges.
 - Real Chromium: a controlled local Telegram-like HTML fixture, rendered-media discovery, native browser download event, complete file bytes and private pending path. No Telegram account was used by this fixture.
 - Real CLI subprocesses: local setup with a custom absolute output directory, streaming direct-file download, repeated-source skip and final file content.
@@ -28,7 +31,7 @@ Validated locally on Linux with CPython 3.12.15. The user-facing validation date
 
 ## Not performed
 
-- A live Telegram `/extract` batch with real multipart RAR data. Google hosted consent, Drive API listing and private `TDL` folder creation were verified separately on hunt; a real extracted tree upload was not performed.
+- A live Telegram auto-extraction batch with real multipart RAR data. Google hosted consent, Drive API listing and private `TDL` folder creation were verified separately on hunt; a real extracted tree upload was not performed.
 - An actual apt/Chromium dependency installation on a clean VPS; native installer package installation was stubbed for its orchestration tests.
 - Docker image build/run or a GitHub Actions run. Docker remains optional.
 - Publishing or pushing changes to GitHub.

@@ -10,6 +10,7 @@ COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock \
     && python -m playwright install --with-deps chromium \
     && apt-get update && (apt-get install -y --no-install-recommends 7zip || apt-get install -y --no-install-recommends p7zip-full) \
+    && (apt-get install -y --no-install-recommends unrar || apt-get install -y --no-install-recommends 7zip-rar || true) \
     && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src

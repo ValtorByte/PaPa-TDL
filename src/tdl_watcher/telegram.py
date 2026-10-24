@@ -245,12 +245,13 @@ class TelegramBrowser:
         await self.page.locator("#column-center .bubbles-scrollable:visible").wait_for(timeout=20000)
         return peer
 
-    async def visible_media(self, peer: str) -> list[dict]:
-        await self.page.evaluate("""() => {
-          const scroller = document.querySelector('#column-center .bubbles-scrollable');
-          if (scroller) scroller.scrollTop = scroller.scrollHeight;
-        }""")
-        await asyncio.sleep(0.5)
+    async def visible_media(self, peer: str, *, at_current_position: bool = False) -> list[dict]:
+        if not at_current_position:
+            await self.page.evaluate("""() => {
+              const scroller = document.querySelector('#column-center .bubbles-scrollable');
+              if (scroller) scroller.scrollTop = scroller.scrollHeight;
+            }""")
+            await asyncio.sleep(0.5)
         return await self.page.evaluate("""peer => {
           const root = document.querySelector('#column-center');
           if (!root) return [];
@@ -268,15 +269,14 @@ class TelegramBrowser:
                            item.classList.contains('document-container') ? 'document-container' : 'bubble';
               const label = item.querySelector('.document-name, .audio-title')?.textContent ||
                             item.innerText?.slice(0, 100) || 'media';
-              result.push({peer, mid, kind, label});
+              result.push({peer, mid, kind, label, album: bubble.dataset.mid});
             }
           }
           return result;
         }""", peer)
 
-    async def visible_events(self, peer: str) -> list[dict]:
-        """Return visible media plus commands sent by the authenticated account."""
-        media = await self.visible_media(peer)
+    async def _events_on_screen(self, peer: str) -> list[dict]:
+        media = await self.visible_media(peer, at_current_position=True)
         commands = await self.page.evaluate(r"""peer => {
           const root = document.querySelector('#column-center');
           if (!root) return [];
@@ -284,7 +284,8 @@ class TelegramBrowser:
           for (const bubble of root.querySelectorAll('.bubble[data-peer-id][data-mid]')) {
             if (bubble.dataset.peerId !== peer || bubble.classList.contains('service')) continue;
             const outgoing = bubble.classList.contains('is-out') ||
-              bubble.classList.contains('is-outgoing') || bubble.classList.contains('own');
+              bubble.classList.contains('is-outgoing') || bubble.classList.contains('own') ||
+              !!bubble.querySelector('.is-out, .is-outgoing, .own');
             if (!outgoing) continue;
             const mid = bubble.dataset.mid;
             if (!/^[1-9][0-9]{0,19}$/.test(mid || '')) continue;
@@ -297,8 +298,90 @@ class TelegramBrowser:
           }
           return result;
         }""", peer)
-        events = [{**item, "type": "media"} for item in media] + commands
-        return sorted(events, key=lambda item: int(item["mid"]))
+        return [{**item, "type": "media"} for item in media] + commands
+
+    async def visible_events(self, peer: str, *, since_mid: str = "0") -> list[dict]:
+        """Read recent chat history, including items Telegram has virtualized off screen."""
+        await self.page.evaluate("""() => {
+          const scroller = document.querySelector('#column-center .bubbles-scrollable');
+          if (scroller) scroller.scrollTop = scroller.scrollHeight;
+        }""")
+        await asyncio.sleep(0.25)
+        found: dict[tuple[str, str], dict] = {}
+        unchanged = 0
+        try:
+            for _ in range(80):
+                for item in await self._events_on_screen(peer):
+                    found[(item["type"], item["mid"])] = item
+                if since_mid != "0" and any(int(item["mid"]) <= int(since_mid)
+                                            for item in found.values()):
+                    break
+                before = await self.page.evaluate("""() => {
+                  const s = document.querySelector('#column-center .bubbles-scrollable');
+                  return s ? [s.scrollTop, s.scrollHeight] : [0, 0];
+                }""")
+                await self.page.evaluate("""() => {
+                  const s = document.querySelector('#column-center .bubbles-scrollable');
+                  if (s) s.scrollTop = Math.max(0, s.scrollTop - Math.max(400, s.clientHeight * 0.8));
+                }""")
+                await asyncio.sleep(0.2)
+                after = await self.page.evaluate("""() => {
+                  const s = document.querySelector('#column-center .bubbles-scrollable');
+                  return s ? [s.scrollTop, s.scrollHeight] : [0, 0];
+                }""")
+                unchanged = unchanged + 1 if after == before else 0
+                if unchanged and after[0] == 0:
+                    await asyncio.sleep(0.5)  # Telegram may still be loading an older page.
+                    latest = await self.page.evaluate("""() => {
+                      const s = document.querySelector('#column-center .bubbles-scrollable');
+                      return s ? [s.scrollTop, s.scrollHeight] : [0, 0];
+                    }""")
+                    if latest != after:
+                        unchanged = 0
+                if unchanged >= 3:
+                    break
+        finally:
+            await self.page.evaluate("""() => {
+              const s = document.querySelector('#column-center .bubbles-scrollable');
+              if (s) s.scrollTop = s.scrollHeight;
+            }""")
+        return sorted(found.values(), key=lambda item: int(item["mid"]))
+
+    async def _reveal_media(self, peer: str, mid: str, kind: str) -> None:
+        """Scroll older chat pages until the selected message is rendered again."""
+        await self.page.evaluate("""() => {
+          const s = document.querySelector('#column-center .bubbles-scrollable');
+          if (s) s.scrollTop = s.scrollHeight;
+        }""")
+        selector = f'#column-center .bubble[data-peer-id="{peer}"]'
+        selector += f'[data-mid="{mid}"]' if kind == "bubble" else f' .{kind}[data-mid="{mid}"]'
+        for _ in range(80):
+            if await self.page.locator(selector).count() == 1:
+                return
+            before = await self.page.evaluate("""() => {
+              const s = document.querySelector('#column-center .bubbles-scrollable');
+              return s ? [s.scrollTop, s.scrollHeight] : [0, 0];
+            }""")
+            await self.page.evaluate("""() => {
+              const s = document.querySelector('#column-center .bubbles-scrollable');
+              if (s) s.scrollTop = Math.max(0, s.scrollTop - Math.max(400, s.clientHeight * 0.8));
+            }""")
+            await asyncio.sleep(0.2)
+            after = await self.page.evaluate("""() => {
+              const s = document.querySelector('#column-center .bubbles-scrollable');
+              return s ? [s.scrollTop, s.scrollHeight] : [0, 0];
+            }""")
+            if after == before and before[0] == 0:
+                await asyncio.sleep(0.6)
+                if await self.page.locator(selector).count() == 1:
+                    return
+                again = await self.page.evaluate("""() => {
+                  const s = document.querySelector('#column-center .bubbles-scrollable');
+                  return s ? [s.scrollTop, s.scrollHeight] : [0, 0];
+                }""")
+                if again == after:
+                    break
+        raise TelegramError("The selected archive part could not be found in Telegram history.")
 
     async def send_text(self, text: str) -> None:
         """Send a short status message to the currently open group."""
@@ -319,6 +402,7 @@ class TelegramBrowser:
             raise TelegramError("Invalid Telegram media type.")
         root = f'#column-center .bubble[data-peer-id="{peer}"]'
         selector = root + f'[data-mid="{mid}"]' if kind == "bubble" else root + f' .{kind}[data-mid="{mid}"]'
+        await self._reveal_media(peer, mid, kind)
         target = self.page.locator(selector)
         if await target.count() != 1:
             raise TelegramError("The Telegram media is no longer visible; it was not downloaded.")

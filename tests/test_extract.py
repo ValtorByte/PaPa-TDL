@@ -9,9 +9,9 @@ import zipfile
 from tdl_watcher.common import StorageError
 from tdl_watcher.config import Settings
 from tdl_watcher.extract import (InvalidArchivePassword, PasswordRequired,
-                                 batch_folder_name, extract_archives)
+                                 _safe_member, batch_folder_name, extract_archives)
 from tdl_watcher.storage import LocalClient
-from tdl_watcher.service import _load_control, _process_extract_commands
+from tdl_watcher.service import _archive_group, _load_control, _process_extract_commands
 
 
 class ExtractionTests(unittest.TestCase):
@@ -39,6 +39,11 @@ class ExtractionTests(unittest.TestCase):
         self.assertTrue(archive_path.exists())
         self.assertFalse((self.root / "outside.txt").exists())
 
+    def test_archive_paths_reject_windows_and_unix_traversal(self):
+        self.assertTrue(_safe_member("folder/file.txt"))
+        for name in ("../../outside.txt", "..\\outside.txt", "/etc/passwd", "C:\\outside.txt"):
+            self.assertFalse(_safe_member(name), name)
+
     def test_multipart_name_uses_first_volume(self):
         paths = [self.archives / "SOC TIER 1.part2.rar", self.archives / "SOC TIER 1.part1.rar"]
         for path in paths:
@@ -49,7 +54,8 @@ class ExtractionTests(unittest.TestCase):
         archive = self.archives / "private.rar"
         archive.write_bytes(b"part")
         failed = __import__("subprocess").CompletedProcess([], 2, "ERROR: Wrong password")
-        with patch("tdl_watcher.extract._run_7z", return_value=failed):
+        with patch("tdl_watcher.extract._run_7z", return_value=failed), \
+             patch("tdl_watcher.extract._run_unrar", return_value=failed):
             with self.assertRaises(PasswordRequired):
                 extract_archives(self.archives, self.root / "one")
             with self.assertRaises(InvalidArchivePassword) as raised:
@@ -101,6 +107,74 @@ class ExtractionTests(unittest.TestCase):
         self.assertIn("11", _load_control(settings)["ignored_media"])
         self.assertTrue(any("Extraction complete" in call.args[0]
                             for call in browser.send_text.await_args_list))
+
+    def test_multipart_rar_is_recognized_without_commands(self):
+        first = {"type": "media", "peer": "-123", "mid": "21", "kind": "bubble",
+                 "label": "Course.part1.rar"}
+        second = {**first, "mid": "22", "label": "Course.part2.rar"}
+        self.assertEqual(_archive_group(first), _archive_group(second))
+        self.assertEqual(_archive_group({**first, "label": "Course.rar"}), _archive_group(first))
+
+    def test_auto_archive_batch_downloads_and_extracts_without_commands(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        folder = storage.choose_folder()
+        browser = type("Browser", (), {})()
+        browser.send_text = AsyncMock()
+
+        async def download(spec, destination):
+            path = destination / spec["label"]
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(f"lesson-{spec['mid']}.txt", "ready")
+            return path
+
+        browser.download = AsyncMock(side_effect=download)
+        events = [
+            {"type": "media", "peer": "-123", "mid": "31", "kind": "grouped-item",
+             "album": "31", "label": "first.zip"},
+            {"type": "media", "peer": "-123", "mid": "32", "kind": "grouped-item",
+             "album": "31", "label": "second.zip"},
+        ]
+        with patch("tdl_watcher.service.AUTO_QUIET_SECONDS", 0):
+            for _ in range(3):
+                asyncio.run(_process_extract_commands(settings, browser, storage, folder, "-123", events))
+        output = settings.local_root / "first"
+        self.assertEqual((output / "lesson-31.txt").read_text(), "ready")
+        self.assertEqual((output / "lesson-32.txt").read_text(), "ready")
+        self.assertEqual(set(_load_control(settings)["ignored_media"]), {"31", "32"})
+
+    def test_missing_part_waits_and_recovers_when_next_part_arrives(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        folder = storage.choose_folder()
+        browser = type("Browser", (), {})()
+        browser.send_text = AsyncMock()
+
+        async def download(spec, destination):
+            path = destination / spec["label"]
+            path.write_bytes(b"part")
+            return path
+
+        browser.download = AsyncMock(side_effect=download)
+        first = {"type": "media", "peer": "-123", "mid": "41", "kind": "bubble",
+                 "label": "Course.part1.rar"}
+        third = {**first, "mid": "43", "label": "Course.part3.rar"}
+        second = {**first, "mid": "42", "label": "Course.part2.rar"}
+        with patch("tdl_watcher.service.AUTO_QUIET_SECONDS", 0):
+            for _ in range(3):
+                asyncio.run(_process_extract_commands(settings, browser, storage, folder,
+                                                      "-123", [first, third]))
+            batch = _load_control(settings)["batch"]
+            self.assertTrue(batch["awaiting_more"])
+            self.assertTrue(any("missing: 2" in call.args[0]
+                                for call in browser.send_text.await_args_list))
+            asyncio.run(_process_extract_commands(settings, browser, storage, folder,
+                                                  "-123", [first, second, third]))
+            self.assertIn("42", _load_control(settings)["batch"]["downloaded"])
 
 
 if __name__ == "__main__":

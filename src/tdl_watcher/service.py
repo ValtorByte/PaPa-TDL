@@ -13,14 +13,42 @@ from playwright.async_api import Error as BrowserError
 from .config import Settings
 from .config import private_json
 from .common import StorageError
-from .extract import (InvalidArchivePassword, PasswordRequired, batch_folder_name,
-                      extract_archives)
+from .extract import (InvalidArchivePassword, PasswordRequired, PART_RE, ARCHIVE_RE,
+                      batch_folder_name, extract_archives)
 from .storage import make_storage
 from .telegram import TelegramBrowser, TelegramError, safe_filename
 
 
 PENDING_RE = re.compile(r"^([1-9][0-9]{0,16})_([1-9][0-9]{0,19})$")
 CONTROL_FILE = "extract-control.json"
+AUTO_QUIET_SECONDS = 30
+
+
+def _archive_group(event):
+    """Identify multipart sets and Telegram albums containing archives."""
+    label = str(event.get("label", "")).strip()
+    match = PART_RE.search(label)
+    if match:
+        return "parts:" + label[:match.start()].casefold()
+    if event.get("album") and ARCHIVE_RE.search(label):
+        return "album:" + str(event["album"])
+    archive = ARCHIVE_RE.search(label)
+    if archive:
+        return "parts:" + label[:archive.start()].casefold()
+    return None
+
+
+def _missing_parts(files):
+    numbers = set()
+    for path in files:
+        match = PART_RE.search(path.name)
+        if match and match.group(1):
+            numbers.add(int(match.group(1)))
+        elif match and match.group(5):
+            numbers.add(int(match.group(5)))
+    if not numbers:
+        return []
+    return [number for number in range(1, max(numbers) + 1) if number not in numbers]
 
 
 def _control_path(settings):
@@ -57,16 +85,30 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
     if not batch:
         starts = [event for event in commands if int(event["mid"]) > int(control["last_command_mid"])
                   and re.fullmatch(r"/extract(?:@\w+)?", event["text"], re.I)]
-        if not starts:
-            return False
-        start = starts[-1]
-        batch = {"peer": peer, "start_mid": start["mid"], "done_mid": None,
-                 "media": [], "downloaded": {}, "awaiting_password": False,
-                 "destination": settings.destination}
+        if starts:
+            start = starts[-1]
+            batch = {"peer": peer, "start_mid": start["mid"], "done_mid": None,
+                     "media": [], "downloaded": {}, "awaiting_password": False,
+                     "destination": settings.destination}
+            control["last_command_mid"] = start["mid"]
+        else:
+            ignored = set(control.get("ignored_media", []))
+            groups = {}
+            for event in media:
+                key = _archive_group(event)
+                if key and event["mid"] not in ignored:
+                    groups.setdefault(key, []).append(event)
+            if not groups:
+                return False
+            key, found = max(groups.items(), key=lambda pair: max(int(e["mid"]) for e in pair[1]))
+            batch = {"peer": peer, "start_mid": min((e["mid"] for e in found), key=int),
+                     "done_mid": None, "media": [], "downloaded": {},
+                     "awaiting_password": False, "destination": settings.destination,
+                     "auto": True, "group_key": key, "quiet_since": time.time()}
         control["batch"] = batch
-        control["last_command_mid"] = start["mid"]
         _save_control(settings, control)
-        await browser.send_text("Extraction batch opened. Send all ZIP/RAR/7z parts, then send /done.")
+        if not batch.get("auto"):
+            await browser.send_text("Extraction batch opened. Send all ZIP/RAR/7z parts, then send /done.")
 
     if batch.get("peer") != peer:
         raise StorageError("An extraction batch belongs to another Telegram group; finish it before changing groups.")
@@ -75,18 +117,29 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
 
     done_candidates = [event for event in commands
                        if int(event["mid"]) > int(batch["start_mid"])
+                       and int(event["mid"]) > int(batch.get("done_mid") or 0)
+                       and int(event["mid"]) > int(control["last_command_mid"])
                        and re.fullmatch(r"/done(?:@\w+)?", event["text"], re.I)]
-    if not batch.get("done_mid") and done_candidates:
+    if done_candidates and (not batch.get("auto") or batch.get("awaiting_more")):
         batch["done_mid"] = done_candidates[0]["mid"]
+        batch["awaiting_more"] = False
+        batch.pop("last_attempt_signature", None)
         control["last_command_mid"] = batch["done_mid"]
 
-    upper = int(batch["done_mid"]) if batch.get("done_mid") else None
+    upper = int(batch["done_mid"]) if batch.get("done_mid") and not batch.get("awaiting_more") else None
     known = set(batch["media"])
     for event in media:
         mid = int(event["mid"])
-        if mid > int(batch["start_mid"]) and (upper is None or mid < upper) and event["mid"] not in known:
+        belongs = (_archive_group(event) == batch.get("group_key") if batch.get("auto")
+                   else mid > int(batch["start_mid"]) and (upper is None or mid < upper))
+        if belongs and event["mid"] not in known:
             batch["media"].append(event["mid"])
             known.add(event["mid"])
+            if batch.get("auto"):
+                batch["quiet_since"] = time.time()
+                batch["done_mid"] = None
+                batch["awaiting_more"] = False
+                batch.pop("last_attempt_signature", None)
     batch["media"].sort(key=int)
     _save_control(settings, control)
 
@@ -108,7 +161,11 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         _save_control(settings, control)
         return True  # Telegram's rendered message list may have changed.
 
-    if not batch.get("done_mid"):
+    if batch.get("auto") and batch["media"] and not batch.get("done_mid"):
+        if time.time() - batch["quiet_since"] >= AUTO_QUIET_SECONDS:
+            batch["done_mid"] = max(batch["media"], key=int)
+            _save_control(settings, control)
+    if not batch.get("done_mid") or batch.get("awaiting_more"):
         return True
     if not batch["media"]:
         await browser.send_text("No archive files were found between /extract and /done. Send /extract to start again.")
@@ -132,6 +189,17 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
     extracted = root / "extracted"
     files = [incoming / batch["downloaded"][mid] for mid in batch["media"]]
     name = batch_folder_name(files, f"Telegram batch {batch['start_mid']}")
+    signature = ",".join(batch["media"])
+    if batch.get("last_attempt_signature") == signature and not password:
+        return True
+    missing = _missing_parts(files)
+    if missing:
+        batch["last_attempt_signature"] = signature
+        batch["awaiting_more"] = True
+        _save_control(settings, control)
+        await browser.send_text("Archive parts are missing: " + ", ".join(map(str, missing[:20])) +
+                                ". Send them and then /done.")
+        return True
     try:
         extract_archives(incoming, extracted, password, max_bytes=settings.max_download_bytes)
     except PasswordRequired:
@@ -143,6 +211,12 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         batch["awaiting_password"] = True
         _save_control(settings, control)
         await browser.send_text("That password was rejected. Send /password YOUR_PASSWORD again.")
+        return True
+    except StorageError as exc:
+        batch["last_attempt_signature"] = signature
+        batch["awaiting_more"] = True
+        _save_control(settings, control)
+        await browser.send_text(f"Extraction could not finish: {exc} Send any missing parts, then /done.")
         return True
 
     batch_id = f"tg-{peer[1:]}-{batch['start_mid']}"
@@ -280,6 +354,7 @@ async def watch(settings: Settings, *, selected_ids=None, once=False) -> None:
         print(f"Watching Telegram group {settings.group_name} (chat ID {peer}).", flush=True)
         completed = set()
         retry_after = {}
+        scan_since = "0"
         while True:
             if _stop_requested(settings):
                 print("Watcher stopped by request.", flush=True)
@@ -295,7 +370,11 @@ async def watch(settings: Settings, *, selected_ids=None, once=False) -> None:
                 await asyncio.sleep(30)
                 continue
             try:
-                events = await browser.visible_events(peer)
+                control = _load_control(settings)
+                floor = control["batch"]["start_mid"] if control.get("batch") else scan_since
+                events = await browser.visible_events(peer, since_mid=floor)
+                if events:
+                    scan_since = max((item["mid"] for item in events), key=int)
             except BrowserError:
                 if once:
                     raise TelegramError("Telegram browser disconnected; retry the command.") from None
