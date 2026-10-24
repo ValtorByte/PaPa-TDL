@@ -129,34 +129,63 @@ def banner():
     print()
 
 
-def panel(title, lines, width=72):
-    width = max(28, min(width, shutil.get_terminal_size((80, 24)).columns - 2))
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _panel_lines(title, lines, width, accent="35"):
     utf = unicode_terminal()
-    top, bottom, side, horizontal = ("╭", "╰", "│", "─") if utf else ("+", "+", "|", "-")
-    right_top, right_bottom = ("╮", "╯") if utf else ("+", "+")
-    print(color(top + horizontal * (width - 2) + right_top, "35"))
-    content = [(title.upper(), "1;96"), ("", None)] + [
-        (str(line), "1;96" if str(line) in {"FILES", "ACCOUNTS & STORAGE", "ACTIVITY", "EXTRACTION"} else None)
-        for line in lines]
-    for line, style in content:
-        wrapped = textwrap.wrap(line, width=width - 6,
+    tl, tr, bl, br, side, bar = ("╭", "╮", "╰", "╯", "│", "─") if utf else ("+", "+", "+", "+", "|", "-")
+    result = [color(tl + bar * (width - 2) + tr, accent)]
+    for line in [color(title.upper(), "1;96"), "", *map(str, lines)]:
+        plain = ANSI_RE.sub("", line)
+        style = re.search(r"\x1b\[([0-9;]*)m", line)
+        wrapped = textwrap.wrap(plain, width=max(1, width - 6),
                                 break_long_words=True, break_on_hyphens=False) or [""]
         for item in wrapped:
-            visible_length = len(re.sub(r"\x1b\[[0-9;]*m", "", item))
-            content_text = item + " " * max(0, width - 6 - visible_length)
+            padded = item.ljust(width - 6)
             if style:
-                content_text = color(content_text, style)
-            print(color(side, "35") + "  " + content_text + "  " + color(side, "35"))
-    print(color(bottom + horizontal * (width - 2) + right_bottom, "35"))
+                padded = color(padded, style.group(1))
+            result.append(color(side, accent) + "  " + padded + "  " + color(side, accent))
+    result.append(color(bl + bar * (width - 2) + br, accent))
+    return result
+
+
+def panel(title, lines, width=72):
+    width = max(16, min(width, shutil.get_terminal_size((80, 24)).columns - 2))
+    print("\n".join(_panel_lines(title, lines, width)))
+
+
+def panel_row(cards):
+    """Adapt horizontal cards to terminal width without ANSI alignment errors."""
+    columns = max(20, min(160, shutil.get_terminal_size((80, 24)).columns - 2))
+    count = min(len(cards), 3 if columns >= 120 else 2 if columns >= 76 else 1)
+    width = (columns - 2 * (count - 1)) // count
+    for offset in range(0, len(cards), count):
+        group = cards[offset:offset + count]
+        rendered = [_panel_lines(title, lines, width, accent) for title, lines, accent in group]
+        height = max(map(len, rendered))
+        for box, (_, _, accent) in zip(rendered, group):
+            empty = color("│" if unicode_terminal() else "|", accent) + " " * (width - 2) + color("│" if unicode_terminal() else "|", accent)
+            box[-1:-1] = [empty] * (height - len(box))
+        for row in zip(*rendered):
+            print("  ".join(row))
 
 
 def dashboard(settings):
+    from .background import _running
     drive_ready = (settings.data_dir / "google-token.json").is_file()
     profile = settings.data_dir / "browser-profile"
     telegram_ready = profile.exists() and any(profile.iterdir())
-    destination = "Google Drive / " + (settings.drive_folder_id or "TDL") if settings.destination == "drive" else "Local / " + str(settings.local_root)
-    panel("Current setup", ["Save to    " + destination,
-          "Telegram   " + status(telegram_ready, "connected", "sign-in required"),
-          "Google     " + status(drive_ready, "connected", "sign-in required"),
-          "Group      " + settings.group_name,
-          "Local path " + str(settings.local_root)])
+    running = _running(settings)
+    disk = shutil.disk_usage(settings.data_dir)
+    panel_row([
+        ("01 / Accounts", ["Telegram  " + status(telegram_ready, "session saved", "sign-in required"),
+            "Google    " + status(drive_ready, "authorized", "sign-in required"),
+            "Group     " + settings.group_name], "95"),
+        ("02 / Destination", [color("GOOGLE DRIVE" if settings.destination == "drive" else "LOCAL SERVER", "1;96"),
+            "Folder: " + (settings.drive_folder_id or "TDL") if settings.destination == "drive" else str(settings.local_root),
+            "Private files by default"], "36"),
+        ("03 / Service", [status(bool(running), "running", "stopped"),
+            "Disk free: " + ProgressBar._size(disk.free),
+            "Archive passwords: live console"], "35"),
+    ])

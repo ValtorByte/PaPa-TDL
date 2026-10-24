@@ -21,7 +21,7 @@ from .locks import locked
 from .service import retry_pending, submit_extract_password, watch
 from .storage import make_storage, LocalClient
 from .telegram import TelegramBrowser, TelegramError, safe_filename
-from .ui import banner, color, panel, dashboard
+from .ui import banner, color, panel, panel_row, dashboard
 
 
 def setup(settings):
@@ -112,36 +112,28 @@ def first_run(settings):
 
 
 def menu(settings):
+    if sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
+        print("\033[2J\033[H", end="")
     banner()
     dashboard(settings)
-    panel("Control center", [
-        "FILES",
-        " 1  Start watching in background",
-        " 2  Choose visible Telegram messages",
-        " 3  Watch in this terminal",
-        " 4  Save a file from an HTTP(S) URL",
-        "",
-        "EXTRACTION",
-        "    Send ZIP/RAR/7z archives to TDL; parts group automatically",
-        "    Optional manual batch: /extract → files → /done",
-        "    For encrypted archives: papa-tdl extract-password",
-        "",
-        "ACCOUNTS & STORAGE",
-        " 5  Sign in to Telegram (phone + code)",
-        " 6  Connect Google Drive (Google browser sign-in)",
-        " 7  Change destination or folder",
-        " 8  Check storage connection",
-        "",
-        "ACTIVITY",
-        " 9  Watcher status",
-        "10  View recent transfers",
-        "11  Stop background watcher",
-        " 0  Exit"])
+    print(color("  CONTROL CENTER  /  v" + __version__, "1;95"))
+    panel_row([
+        ("Files & live service", [color(" 1  Open live service", "1;92"),
+            " 2  Select Telegram files", " 3  Watch in this terminal",
+            " 4  Download from URL", "", "Passwords and errors appear",
+            "inside the live service."], "95"),
+        ("Accounts & storage", [" 5  Telegram sign-in", " 6  Google Drive sign-in",
+            " 7  Storage settings", " 8  Check destination", "",
+            "Send ZIP / RAR / 7z to TDL.", "Related parts group automatically."], "36"),
+        ("Activity & controls", [" 9  Watcher status", "10  Open live activity",
+            color("11  Stop background service", "93"), " 0  Exit", "",
+            "Ctrl+C returns to the menu.", "No extra Enter needed."], "35"),
+    ])
     choice = input(color("  Choose [0-11]: ", "1;95")).strip()
     if choice == "0":
         return None
-    commands = {"1": "start", "2": "select", "3": "watch", "4": "download", "5": "login", "6": "drive-login",
-                "7": "setup", "8": "check", "9": "status", "10": "logs", "11": "stop"}
+    commands = {"1": "console", "2": "select", "3": "watch", "4": "download", "5": "login", "6": "drive-login",
+                "7": "setup", "8": "check", "9": "status", "10": "console", "11": "stop"}
     if choice not in commands:
         raise ValueError("Choose a menu number from 0 to 11.")
     command, argv = commands[choice], [commands[choice]]
@@ -153,7 +145,7 @@ def parser():
     result.add_argument("--version", action="version", version=f"PaPa-TDL {__version__}")
     sub = result.add_subparsers(dest="command")
     for command in ("setup", "login", "drive-login", "download", "telegram", "watch", "list", "select", "extract-password",
-                    "check", "retry", "start", "stop", "status", "logs"):
+                    "check", "retry", "start", "stop", "status", "logs", "console"):
         item = sub.add_parser(command)
         if command in {"download", "telegram", "watch", "list", "select", "check", "retry", "start"}:
             item.add_argument("--to", choices=["local", "drive"], help="Override the configured destination")
@@ -287,7 +279,7 @@ def command_settings(args):
 
 def execute(args):
     settings = command_settings(args)
-    if args.command in {"start", "stop", "status", "logs"}:
+    if args.command in {"start", "stop", "status", "logs", "console"}:
         from . import background
         if args.command == "logs":
             background.logs(settings, args.follow)
@@ -353,8 +345,11 @@ def main():
                     return 0
                 try:
                     execute(argument_parser.parse_args(choice))
+                    if choice[0] in {"console", "watch", "telegram", "logs"}:
+                        continue
                 except (KeyboardInterrupt, asyncio.CancelledError):
-                    print("\nCommand interrupted. Your saved settings are retained.")
+                    print("\n" + color("Returned to menu.", "96"))
+                    continue
             except Exception as exc:
                 show_error(exc)
             input("\nPress Enter to return to the control center...")

@@ -15,6 +15,8 @@ from .common import StorageError
 from .telegram import safe_filename
 from .ui import ProgressBar
 
+EXTRACT_ENGINE_VERSION = 2
+
 
 class PasswordRequired(StorageError):
     """The batch contains an encrypted archive and needs a password."""
@@ -147,10 +149,16 @@ def _seven_zip_error(result: subprocess.CompletedProcess, password: str | None) 
         if password:
             raise InvalidArchivePassword("The archive password was rejected.")
         raise PasswordRequired("This extraction batch requires a password.")
-    raise StorageError("Archive extraction failed; verify that every volume is present and undamaged.")
+    if any(value in output for value in ("missing volume", "unexpected end", "cannot find", "no such file")):
+        raise StorageError("An archive volume is missing or truncated; check all downloaded parts.")
+    if "unsupported method" in output:
+        raise StorageError("The installed 7-Zip cannot decode this archive; install a current RAR-capable 7-Zip or unrar.")
+    raise StorageError(f"7-Zip failed (exit {result.returncode}); check archive integrity and installed codec support.")
 
 
 def _run_unrar(arguments: list[str], password: str | None) -> subprocess.CompletedProcess:
+    # Never let an unattended native tool open its own invisible password prompt.
+    arguments = [*arguments[:1], *([] if password else ["-p-"]), *arguments[1:]]
     return subprocess.run(["unrar", *arguments], input=(password or "") + "\n", text=True,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=24 * 60 * 60,
                           env={**os.environ, "LANG": "C", "LC_ALL": "C"})
@@ -160,16 +168,26 @@ def _unrar_error(result: subprocess.CompletedProcess, password: str | None) -> N
     if result.returncode == 0:
         return
     output = result.stdout.lower()
-    if "password" in output or "encrypted" in output:
+    if result.returncode == 11 or "password" in output or "encrypted" in output:
         if password:
             raise InvalidArchivePassword("The archive password was rejected.")
         raise PasswordRequired("This extraction batch requires a password.")
-    raise StorageError("RAR extraction failed; verify that every volume is present and undamaged.")
+    reasons = {3: "Archive checksum failed; a part is damaged or truncated.",
+               5: "Archive output could not be written; check free disk space and permissions.",
+               6: "An archive volume could not be opened; check all parts and their filenames.",
+               7: "The installed unrar does not support the requested options.",
+               8: "Not enough memory to extract the archive.",
+               9: "An extracted file could not be created; check disk space and permissions.",
+               10: "No archive files could be extracted; check archive metadata and tool compatibility."}
+    raise StorageError(f"unrar failed (exit {result.returncode}): " + reasons.get(
+        result.returncode, "Verify that every archive volume is present and undamaged."))
 
 
 def _extract_rar(archive: Path, output: Path, password: str | None, limit: int) -> None:
     listing = _run_unrar(["lt", "-c-", str(archive)], password)
     _unrar_error(listing, password)
+    if not password and re.search(r"(?im)^\s*Flags:\s*[^\r\n]*\bencrypted\b", listing.stdout):
+        raise PasswordRequired("This RAR archive requires a password.")
     members = re.findall(r"(?m)^\s*Name:\s*(.+)$", listing.stdout)
     sizes = [int(value) for value in re.findall(r"(?m)^\s*Size:\s*([0-9]+)$", listing.stdout)]
     if not members or any(not _safe_member(name) for name in members):
@@ -183,6 +201,8 @@ def _extract_rar(archive: Path, output: Path, password: str | None, limit: int) 
 def _extract_7z(archive: Path, output: Path, password: str | None, limit: int) -> None:
     listing = _run_7z(["l", "-slt", "--", str(archive)], password)
     _seven_zip_error(listing, password)
+    if not password and re.search(r"(?im)^Encrypted\s*=\s*\+", listing.stdout):
+        raise PasswordRequired("This archive requires a password.")
     sizes = [int(value) for value in re.findall(r"(?m)^Size = ([0-9]+)$", listing.stdout)]
     members = re.findall(r"(?m)^Path = (.+)$", listing.stdout.split("----------", 1)[-1])
     if not members or any(not _safe_member(name) for name in members):
@@ -224,7 +244,8 @@ def extract_archives(source: Path, destination: Path, password: str | None = Non
         result = _validate_tree(destination)
         progress.finish(f"{len(result)} files ready")
         return result
-    except BaseException:
-        progress.finish("failed; source files retained", success=False)
+    except BaseException as exc:
+        reason = str(exc) if isinstance(exc, StorageError) else type(exc).__name__
+        progress.finish(f"failed: {reason}; source files retained", success=False)
         shutil.rmtree(destination, ignore_errors=True)
         raise

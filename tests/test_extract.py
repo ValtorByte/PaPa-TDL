@@ -179,3 +179,47 @@ class ExtractionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeArchiveMetadataTests(unittest.TestCase):
+    def test_rar_encryption_flags_request_password_before_quiet_extraction(self):
+        import subprocess
+        from tdl_watcher.extract import _extract_rar
+        listing = subprocess.CompletedProcess([], 0, '''
+Archive: course.part1.rar
+Details: RAR 5, volume 1
+        Name: lesson.bin
+        Type: File
+        Size: 500000
+       Flags: encrypted
+''')
+        with patch('tdl_watcher.extract._run_unrar', return_value=listing) as tool:
+            with self.assertRaises(PasswordRequired):
+                _extract_rar(Path('course.part1.rar'), Path('output'), None, 1000000)
+        self.assertEqual(tool.call_count, 1)
+
+    def test_seven_zip_encryption_metadata_requests_password(self):
+        import subprocess
+        from tdl_watcher.extract import _extract_7z
+        listing = subprocess.CompletedProcess([], 0, '''----------
+Path = lesson.bin
+Size = 500000
+Encrypted = +
+''')
+        with patch('tdl_watcher.extract._run_7z', return_value=listing) as tool:
+            with self.assertRaises(PasswordRequired):
+                _extract_7z(Path('course.part1.rar'), Path('output'), None, 1000000)
+        self.assertEqual(tool.call_count, 1)
+
+    def test_unrar_password_exit_code_is_detected_without_output(self):
+        import subprocess
+        from tdl_watcher.extract import _unrar_error
+        for password, error in [(None, PasswordRequired), ('not-logged', InvalidArchivePassword)]:
+            with self.assertRaises(error):
+                _unrar_error(subprocess.CompletedProcess([], 11, ''), password)
+
+    def test_other_failure_reports_tool_exit_code(self):
+        import subprocess
+        from tdl_watcher.extract import _unrar_error
+        with self.assertRaisesRegex(StorageError, 'exit 3.*checksum'):
+            _unrar_error(subprocess.CompletedProcess([], 3, ''), None)

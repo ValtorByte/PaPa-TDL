@@ -1,10 +1,12 @@
 """Long-running Telegram group watcher with local crash recovery."""
 
 import asyncio
+import getpass
 import json
 import os
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -14,7 +16,7 @@ from .config import Settings
 from .config import private_json
 from .common import StorageError
 from .extract import (InvalidArchivePassword, PasswordRequired, PART_RE, ARCHIVE_RE,
-                      batch_folder_name, extract_archives)
+                      EXTRACT_ENGINE_VERSION, batch_folder_name, extract_archives)
 from .storage import make_storage
 from .telegram import TelegramBrowser, TelegramError, safe_filename
 
@@ -153,6 +155,15 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         raise StorageError("An extraction batch belongs to another Telegram group; finish it before changing groups.")
     if batch.get("destination") != settings.destination:
         raise StorageError("The extraction destination changed mid-batch; restore it or finish the saved batch first.")
+    if batch.get("extract_engine_version") != EXTRACT_ENGINE_VERSION:
+        # An earlier decoder failure must not leave an upgraded watcher stuck
+        # behind its saved attempt signature. Reuse downloaded parts once.
+        if not batch.get("extraction_complete") and batch.get("last_attempt_signature"):
+            batch.pop("last_attempt_signature", None)
+            batch["awaiting_more"] = False
+            print("Retrying the retained archive with the updated extraction engine.", flush=True)
+        batch["extract_engine_version"] = EXTRACT_ENGINE_VERSION
+        _save_control(settings, control)
 
     done_candidates = [event for event in commands
                        if int(event["mid"]) > int(batch["start_mid"])
@@ -241,9 +252,15 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
     password = None
     if batch.get("awaiting_password"):
         password = _consume_extract_password(settings)
+        if password is None and os.environ.get("TDL_BACKGROUND") != "1" and sys.stdin.isatty():
+            print("\nArchive password required. Type it below; input is hidden.", flush=True)
+            password = getpass.getpass("Archive password (hidden): ")
+            if not password:
+                print("Password cannot be empty. It will be requested again.", flush=True)
+                return False
         if password is None:
             if not batch.get("password_prompt_sent"):
-                await browser.send_text("This archive needs a password. Enter it privately in the server terminal with: papa-tdl extract-password")
+                await browser.send_text("This archive needs a password. Open PaPa-TDL Live service to enter its password privately.")
                 batch["password_prompt_sent"] = True
                 _save_control(settings, control)
             return False
@@ -258,28 +275,44 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         return False
     missing = _missing_parts(files)
     if missing:
+        print("Archive parts missing: " + ", ".join(map(str, missing[:20])), flush=True)
         batch["last_attempt_signature"] = signature
         batch["awaiting_more"] = True
         _save_control(settings, control)
         await browser.send_text("Archive parts are missing: " + ", ".join(map(str, missing[:20])) +
                                 ". Send them and then /done.")
         return False
-    if not batch.get("extraction_complete"):
+    while not batch.get("extraction_complete"):
         try:
             extract_archives(incoming, extracted, password, max_bytes=settings.max_download_bytes)
         except PasswordRequired:
+            print("Archive password required. Waiting for hidden input in the live service.", flush=True)
             batch["awaiting_password"] = True
+            batch["password_attempt"] = int(batch.get("password_attempt", 0)) + 1
             batch["password_prompt_sent"] = True
             _save_control(settings, control)
-            await browser.send_text("This archive needs a password. Enter it privately in the server terminal with: papa-tdl extract-password")
+            await browser.send_text("This archive needs a password. Open PaPa-TDL Live service to enter its password privately.")
+            if os.environ.get("TDL_BACKGROUND") != "1" and sys.stdin.isatty():
+                password = getpass.getpass("Archive password (hidden): ") or None
+                if password:
+                    continue
+                return True
             return False
         except InvalidArchivePassword:
+            print("Archive password incorrect. Please try again in the live service.", flush=True)
             batch["awaiting_password"] = True
+            batch["password_attempt"] = int(batch.get("password_attempt", 0)) + 1
             batch["password_prompt_sent"] = True
             _save_control(settings, control)
-            await browser.send_text("That password was incorrect. Enter the correct password in the server terminal with: papa-tdl extract-password")
+            await browser.send_text("That password was incorrect. Enter the correct password in PaPa-TDL Live service.")
+            if os.environ.get("TDL_BACKGROUND") != "1" and sys.stdin.isatty():
+                password = getpass.getpass("Archive password (hidden): ") or None
+                if password:
+                    continue
+                return True
             return False
         except StorageError as exc:
+            print(f"Archive extraction failed: {exc}", flush=True)
             batch["last_attempt_signature"] = signature
             batch["awaiting_more"] = True
             _save_control(settings, control)

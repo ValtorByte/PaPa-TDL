@@ -1,6 +1,8 @@
-# PaPa-TDL 1.6.1 validation
+# PaPa-TDL 1.6.3 validation
 
-The 82-test suite and integration checks listed below were run on version 1.6.0 before the 1.6.1 recovery changes. Version 1.6.1 was checked for Python compilation, installer shell syntax, and whitespace errors on Linux with CPython 3.12. The 1.6.1 runtime changes still need a live watcher check after publishing.
+The full suite runs 92 tests (two opt-in environment cases skipped). Regression checks cover encrypted RAR metadata with successful listing, silent unrar password failures, 7-Zip encryption flags, terminal password retry and retained-batch recovery without downloading again. Real seven-volume RAR archives with encrypted data and encrypted headers both detected missing/wrong passwords and extracted byte-for-byte with the correct password. Python compilation, installer shell syntax and whitespace checks passed. Live Telegram and VPS deployment were not performed.
+
+Earlier integration checks are recorded below.
 
 ## Passed
 

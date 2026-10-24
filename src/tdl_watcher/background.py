@@ -1,7 +1,9 @@
 """Portable background lifecycle, without requiring an init service."""
 
 import json
+import getpass
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -10,6 +12,7 @@ import psutil
 
 from .config import private_json
 from .locks import locked
+from .ui import color, panel
 
 
 def _start_ticks(pid):
@@ -151,3 +154,51 @@ def logs(settings, follow=False):
                 print(line, end="", flush=True)
             else:
                 time.sleep(0.5)
+
+
+def console(settings):
+    """Attach the current terminal to logs and archive password requests."""
+    from .service import _load_control, submit_extract_password, PASSWORD_FILE
+    if not sys.stdin.isatty():
+        raise ValueError("Open the live service in an interactive terminal.")
+    if not _running(settings):
+        start(settings)
+    panel("Live service", ["Downloads, extraction and errors appear here.",
+          "Archive passwords are requested here with hidden input.",
+          "Ctrl+C returns to the menu. Background transfers keep running."])
+    prompted = None
+    progress_active = False
+    path = settings.data_dir / "watcher.log"
+    with path.open("r", encoding="utf-8", errors="replace") as stream:
+        stream.seek(max(0, path.stat().st_size - 8192))
+        while _running(settings):
+            for line in stream.readlines():
+                if sys.stdout.isatty() and re.search(r"\[[#█░∙●. -]+\]", line):
+                    print("\r\033[2K" + color(line.rstrip(), "96"), end="", flush=True)
+                    progress_active = True
+                    continue
+                if progress_active:
+                    print()
+                    progress_active = False
+                code = "91" if any(word in line.lower() for word in
+                    ("failed", "error", "incorrect", "interrupted")) else "96"
+                if any(word in line.lower() for word in ("saved:", "verified", "ready")):
+                    code = "92"
+                print(color(line.rstrip(), code), flush=True)
+            batch = _load_control(settings).get("batch")
+            if batch and batch.get("awaiting_password"):
+                request = (batch["peer"], batch["start_mid"], batch.get("password_attempt", 0))
+                if request != prompted and not (settings.data_dir / PASSWORD_FILE).exists():
+                    if progress_active:
+                        print()
+                        progress_active = False
+                    panel("Password required", ["The archive is downloaded and waiting to be extracted.",
+                          "Type its password below. Input is hidden; it is not sent to Telegram."])
+                    password = getpass.getpass("Archive password (hidden): ")
+                    if password:
+                        submit_extract_password(settings, password)
+                        prompted = request
+                    else:
+                        print(color("Password cannot be empty. Try again, or press Ctrl+C to return.", "93"))
+            time.sleep(0.5)
+    print(color("The background watcher stopped. Check the errors above.", "93"))
