@@ -28,7 +28,7 @@ class BrowserTests(unittest.TestCase):
                     await browser.page.set_content('''
                     <div id="page-chats" style="height:20px">Chats</div><div id="column-center"><div class="bubbles-scrollable">
                       <div class="bubble" data-peer-id="-123" data-mid="55">
-                        <div class="document">sample.txt</div>
+                        <div class="document" data-doc-id="991"><div class="document-name"><span title="sample-full.txt">sample….txt</span></div></div>
                         <div class="document-description">5 B</div>
                       </div></div></div>
                     <div class="btn-menu active" style="display:none">
@@ -46,6 +46,8 @@ class BrowserTests(unittest.TestCase):
                         self.assertTrue(await browser.logged_in())
                         specs = await browser.visible_media('-123')
                         self.assertEqual([s['mid'] for s in specs], ['55'])
+                        self.assertEqual(specs[0]['label'], 'sample-full.txt')
+                        self.assertEqual(specs[0]['doc_id'], '991')
                         saved = await asyncio.wait_for(browser.download(specs[0]), timeout=30)
                         self.assertEqual(saved.read_bytes(), b'hello')
                         self.assertEqual(saved.parent, settings.pending_dir / '123_55')

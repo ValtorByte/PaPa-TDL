@@ -11,7 +11,8 @@ from tdl_watcher.config import Settings
 from tdl_watcher.extract import (InvalidArchivePassword, PasswordRequired,
                                  _safe_member, batch_folder_name, extract_archives)
 from tdl_watcher.storage import LocalClient
-from tdl_watcher.service import _archive_group, _load_control, _process_extract_commands
+from tdl_watcher.service import (_archive_group, _load_control, _process_extract_commands,
+                                 _same_staged_media, _save_control, _batch_root)
 
 
 class ExtractionTests(unittest.TestCase):
@@ -114,6 +115,39 @@ class ExtractionTests(unittest.TestCase):
         second = {**first, "mid": "22", "label": "Course.part2.rar"}
         self.assertEqual(_archive_group(first), _archive_group(second))
         self.assertEqual(_archive_group({**first, "label": "Course.rar"}), _archive_group(first))
+
+    def test_reforwarded_archive_part_is_deduplicated(self):
+        batch = {"downloaded": {"21": "Course.part1.rar"},
+                 "media_meta": {"21": {"doc_id": "991", "label": "Course.part1.rar"}}}
+        self.assertEqual(_same_staged_media(batch, {"mid": "45", "doc_id": "991",
+                                                    "label": "Course.part1.rar"}), "21")
+        self.assertEqual(_same_staged_media(batch, {"mid": "46", "doc_id": "992",
+                                                    "label": "Course.part1.rar"}), "21")
+        self.assertIsNone(_same_staged_media(batch, {"mid": "47", "doc_id": "993",
+                                                     "label": "Course.part2.rar"}))
+
+    def test_saved_password_batch_drops_unstaged_reforwards(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        folder = storage.choose_folder()
+        batch = {"peer": "-123", "start_mid": "21", "done_mid": "27",
+                 "media": ["21", "22", "45"],
+                 "downloaded": {"21": "Course.part1.rar", "22": "Course.part2.rar"},
+                 "awaiting_password": True, "destination": "local",
+                 "extract_engine_version": 2}
+        incoming = _batch_root(settings, batch) / "archives"
+        incoming.mkdir(parents=True)
+        (incoming / "Course.part1.rar").write_bytes(b"one")
+        (incoming / "Course.part2.rar").write_bytes(b"two")
+        _save_control(settings, {"last_command_mid": "0", "batch": batch, "ignored_media": []})
+        browser = type("Browser", (), {"send_text": AsyncMock()})()
+        with patch.dict("os.environ", {"TDL_BACKGROUND": "1"}):
+            asyncio.run(_process_extract_commands(settings, browser, storage, folder, "-123", []))
+        saved = _load_control(settings)
+        self.assertEqual(saved["batch"]["media"], ["21", "22"])
+        self.assertIn("45", saved["ignored_media"])
 
     def test_auto_archive_batch_downloads_and_extracts_without_commands(self):
         settings = Settings("TDL", self.root / "private", destination="local",

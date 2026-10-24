@@ -9,6 +9,7 @@ from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 
 from .common import StorageError
+from .ui import message
 
 BROKER = "https://valtorbyte.ir/papa-tdl-auth"
 SCOPE = "https://www.googleapis.com/auth/drive.file"
@@ -59,9 +60,9 @@ def login_hosted(settings, save_and_check):
     ticket = data.get("ticket", "")
     if not isinstance(ticket, str) or len(ticket) != 43 or not all(c.isalnum() or c in "_-" for c in ticket):
         raise StorageError("The sign-in service returned an invalid request.")
-    print("Open this link on your computer or phone:", flush=True)
+    message("Open this Google sign-in link on your computer or phone:", "info")
     print(f"{BROKER}/login/{ticket}", flush=True)
-    print("Waiting for Google approval. This terminal will continue automatically.", flush=True)
+    message("Waiting for Google approval; this terminal continues automatically.", "warning")
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
         time.sleep(3)

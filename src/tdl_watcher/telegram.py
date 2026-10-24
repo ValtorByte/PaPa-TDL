@@ -13,7 +13,7 @@ from pathlib import Path
 from playwright.async_api import Error as BrowserError, async_playwright
 
 from .config import Settings
-from .ui import ProgressBar
+from .ui import ProgressBar, message
 
 
 WEB_URL = "https://web.telegram.org/k/"
@@ -142,7 +142,7 @@ class TelegramBrowser:
 
     async def login(self) -> None:
         if await self.logged_in():
-            print("Existing private Telegram Web session reused.")
+            message("Existing private Telegram Web session reused.", "success")
             return
         page = self.page
         phone_box = page.locator(PHONE_INPUT)
@@ -151,12 +151,12 @@ class TelegramBrowser:
             await button.wait_for(state="visible", timeout=90000)
             await button.click()
         await phone_box.wait_for(state="visible", timeout=90000)
-        print("Your phone number will be visible as you type. Login codes and passwords stay hidden.")
+        message("Your phone number is visible while typing; codes and passwords stay hidden.", "info")
         for _ in range(3):
             phone = normalize_phone(input("Phone (+country code, e.g. +98912...; Iran 0912... works): "))
             if phone:
                 break
-            print("Enter an international number such as +98912..., or an Iranian mobile number starting 09.")
+            message("Use +country code, or an Iranian mobile number starting with 09.", "warning")
         else:
             raise TelegramError("Invalid phone number format after three attempts.")
         await phone_box.fill(phone)
@@ -167,7 +167,7 @@ class TelegramBrowser:
         await next_button.click()
         state = await self._wait_step(code=True, password=True)
         if state == "code":
-            print("Enter the code Telegram sent through its selected delivery method.")
+            message("Enter the code sent by Telegram.", "info")
             for _ in range(3):
                 box = page.locator(CODE_INPUT)
                 if await box.count() != 1:
@@ -175,14 +175,14 @@ class TelegramBrowser:
                 text_code = await box.get_attribute("name") == "sms-word"
                 secret = getpass.getpass("Telegram login code (hidden): ").strip()
                 if not secret or (not text_code and not re.fullmatch(r"[0-9]{3,32}", secret)):
-                    print("Enter the code exactly as received.")
+                    message("Enter the code exactly as received.", "warning")
                     continue
                 max_length = await box.get_attribute("maxlength")
                 if not max_length and not text_code:
                     digits = await box.locator('..').locator(':scope > div[class*="_digit_"]').count()
                     max_length = str(digits) if digits else None
                 if max_length and not text_code and len(secret) != int(max_length):
-                    print("The code length is incorrect.")
+                    message("The code length is incorrect.", "warning")
                     continue
                 await box.fill(secret)
                 secret = None
@@ -190,7 +190,7 @@ class TelegramBrowser:
                     await box.press("Enter")
                 state = await self._wait_step(password=True)
                 if state == "invalid":
-                    print("Telegram rejected the code; try again.")
+                    message("Telegram rejected the code; try again.", "error")
                     continue
                 break
             else:
@@ -206,14 +206,14 @@ class TelegramBrowser:
                 await box.press("Enter")
                 state = await self._wait_step()
                 if state == "invalid":
-                    print("Telegram rejected the password; try again.")
+                    message("Telegram rejected the password; try again.", "error")
                     continue
                 break
             else:
                 raise TelegramError("Telegram two-step verification failed.")
         if state != "success" or not await self.logged_in():
             raise TelegramError("Telegram login was not completed. Check the official client.")
-        print("Telegram Web sign-in completed; browser profile stored privately on this machine.")
+        message("Telegram sign-in completed. The private session is saved on this machine.", "success")
 
     async def find_group(self) -> str:
         if not await self.logged_in():
@@ -267,9 +267,13 @@ class TelegramBrowser:
               if (!/^[1-9][0-9]{0,19}$/.test(mid || '')) continue;
               const kind = item.classList.contains('grouped-item') ? 'grouped-item' :
                            item.classList.contains('document-container') ? 'document-container' : 'bubble';
-              const label = item.querySelector('.document-name, .audio-title')?.textContent ||
+              const document = item.querySelector('.document');
+              const named = item.querySelector('.document-name [title], .audio-title [title], [data-file-name]');
+              const label = named?.getAttribute('title') || named?.getAttribute('data-file-name') ||
+                            item.querySelector('.document-name, .audio-title')?.textContent ||
                             item.innerText?.slice(0, 100) || 'media';
-              result.push({peer, mid, kind, label, album: bubble.dataset.mid});
+              const docId = document?.getAttribute('data-doc-id') || null;
+              result.push({peer, mid, kind, label, doc_id: docId, album: bubble.dataset.mid});
             }
           }
           return result;
@@ -330,7 +334,13 @@ class TelegramBrowser:
                 }""")
                 unchanged = unchanged + 1 if after == before else 0
                 if unchanged and after[0] == 0:
-                    await asyncio.sleep(0.5)  # Telegram may still be loading an older page.
+                    # Telegram Web virtualizes history and may need more than one
+                    # animation frame before it replaces the rendered page.
+                    await self.page.evaluate("""() => {
+                      const s = document.querySelector('#column-center .bubbles-scrollable');
+                      if (s) s.dispatchEvent(new Event('scroll', {bubbles: true}));
+                    }""")
+                    await asyncio.sleep(1.25)
                     latest = await self.page.evaluate("""() => {
                       const s = document.querySelector('#column-center .bubbles-scrollable');
                       return s ? [s.scrollTop, s.scrollHeight] : [0, 0];
@@ -420,6 +430,8 @@ class TelegramBrowser:
             raise TelegramError("A pending local copy already exists for this message; retry its upload first.")
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = None
+        created_path = False
+        browser_path = None
         progress = ProgressBar("Telegram download", estimate or None)
         try:
             download_waiter = asyncio.create_task(self.page.wait_for_event("download", timeout=30 * 60 * 1000))
@@ -446,8 +458,29 @@ class TelegramBrowser:
                 filename = "file_" + filename
             path = destination / filename
             if path.exists():
-                raise TelegramError("A file with the same name is already present in this extraction batch.")
+                # Re-forwarding the same multipart archive is common.  Treat a
+                # byte-identical volume as the same input, without touching the
+                # already staged copy.  A conflicting volume remains an error.
+                if path.stat().st_size == browser_path.stat().st_size:
+                    import hashlib
+
+                    def digest(candidate):
+                        value = hashlib.sha256()
+                        with candidate.open("rb") as handle:
+                            for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+                                value.update(chunk)
+                        return value.digest()
+
+                    if await asyncio.to_thread(digest, path) == await asyncio.to_thread(digest, browser_path):
+                        browser_path.unlink(missing_ok=True)
+                        progress.finish(f"{path.name} already staged")
+                        return path
+                raise TelegramError(
+                    "A different file with the same archive-part name is already staged; "
+                    "rename or remove the conflicting Telegram upload."
+                )
             shutil.move(str(browser_path), str(path))
+            created_path = True
             progress.update(path.stat().st_size, total=path.stat().st_size)
             progress.finish(f"{path.name} ready")
             print(f"Downloaded: {path.name} ({path.stat().st_size} bytes).", flush=True)
@@ -456,8 +489,10 @@ class TelegramBrowser:
             progress.finish("failed; retry is safe", success=False)
             if owns_destination:
                 shutil.rmtree(destination, ignore_errors=True)
-            elif path is not None:
+            elif created_path and path is not None:
                 path.unlink(missing_ok=True)
+            if browser_path is not None and browser_path != path:
+                browser_path.unlink(missing_ok=True)
             raise
         finally:
             if "download_waiter" in locals() and not download_waiter.done():

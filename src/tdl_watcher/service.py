@@ -41,6 +41,23 @@ def _archive_group(event):
     return None
 
 
+def _same_staged_media(batch, event):
+    """Return the original message id when a re-forward is already staged."""
+    doc_id = str(event.get("doc_id") or "")
+    metadata = batch.setdefault("media_meta", {})
+    if doc_id:
+        for mid, saved in metadata.items():
+            if str(saved.get("doc_id") or "") == doc_id:
+                return mid
+    # Upgrade old saved batches that predate document IDs.  Telegram's title
+    # attribute now supplies the full name, so equal safe names are reliable.
+    candidate = safe_filename(str(event.get("label") or ""), f"telegram_{event['mid']}.bin")
+    for mid, filename in batch.get("downloaded", {}).items():
+        if filename == candidate:
+            return mid
+    return None
+
+
 def _missing_parts(files):
     numbers = set()
     for path in files:
@@ -183,7 +200,15 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         belongs = (_archive_group(event) == batch.get("group_key") if batch.get("auto")
                    else mid > int(batch["start_mid"]) and (upper is None or mid < upper))
         if belongs and event["mid"] not in known:
+            duplicate_of = _same_staged_media(batch, event)
+            if duplicate_of:
+                ignored = list(dict.fromkeys([*control.get("ignored_media", []), event["mid"]]))
+                control["ignored_media"] = ignored[-10000:]
+                continue
             batch["media"].append(event["mid"])
+            batch.setdefault("media_meta", {})[event["mid"]] = {
+                "doc_id": event.get("doc_id"), "label": event.get("label", "")
+            }
             known.add(event["mid"])
             if batch.get("auto"):
                 batch["quiet_since"] = time.time()
@@ -196,6 +221,25 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
     root = _batch_root(settings, batch)
     incoming = root / "archives"
     incoming.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    # Recover saved v1.6.3 batches that collected re-forwarded message IDs
+    # after a complete multipart set had already reached the password prompt.
+    # Their original seven files are intact, so never block the prompt on
+    # downloading later copies that have no staged filename.
+    staged = [incoming / name for name in batch.get("downloaded", {}).values()]
+    if (batch.get("awaiting_password") and staged and not _missing_parts(staged)
+            and all(path.is_file() and path.stat().st_size > 0 for path in staged)):
+        retained = set(batch["downloaded"])
+        duplicates = [mid for mid in batch["media"] if mid not in retained]
+        if duplicates:
+            batch["media"] = [mid for mid in batch["media"] if mid in retained]
+            ignored = list(dict.fromkeys([*control.get("ignored_media", []), *duplicates]))
+            control["ignored_media"] = ignored[-10000:]
+            for key in ("download_failures", "download_retry_at"):
+                for mid in duplicates:
+                    batch.get(key, {}).pop(mid, None)
+            _save_control(settings, control)
+
     specs = {event["mid"]: event for event in media}
     for mid in batch["media"]:
         if mid in batch["downloaded"]:
@@ -233,6 +277,9 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         batch.setdefault("download_failures", {}).pop(mid, None)
         batch.setdefault("download_retry_at", {}).pop(mid, None)
         batch["downloaded"][mid] = path.name
+        batch.setdefault("media_meta", {}).setdefault(mid, {
+            "doc_id": spec.get("doc_id"), "label": spec.get("label", "")
+        })
         _save_control(settings, control)
         return True  # Telegram's rendered message list may have changed.
 

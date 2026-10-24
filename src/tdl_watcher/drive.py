@@ -24,7 +24,7 @@ from .common import CHUNK_SIZE, StorageError, remote_name, source_prefix, md5_fi
 from .config import private_json
 from .oauth_config import resolve_desktop_config
 from .telegram import safe_filename
-from .ui import ProgressBar
+from .ui import ProgressBar, message
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
@@ -55,7 +55,7 @@ def _save_and_check_drive(settings, credentials) -> None:
             client.close()
     except (StorageError, OSError) as exc:
         raise StorageError(f"Google approved access and the token was saved, but Drive is not ready: {exc}") from None
-    print(f"Google Drive connected. Destination folder ready: {folder}", flush=True)
+    message(f"Google Drive connected. Destination folder ready: {folder}", "success")
 
 
 def _google_response(url: str, data: dict) -> tuple[int, dict]:
@@ -173,7 +173,8 @@ def login_drive(settings, client_file: Path | None = None, port: int = 53682) ->
     config = resolve_desktop_config(settings, client_file)
     try:
         flow = InstalledAppFlow.from_client_config(config, SCOPES, autogenerate_code_verifier=True)
-        print("Google browser sign-in is ready. If this runs on a remote VPS, first open", flush=True)
+        message("Google browser sign-in is ready.", "info")
+        print("If this runs on a remote VPS, first open", flush=True)
         print("this SSH forward on the computer with your browser and keep it open:", flush=True)
         print(f"  ssh -N -L {port}:127.0.0.1:{port} YOUR_SSH_USER@YOUR_VPS", flush=True)
         print("Then open the Google URL below in that computer's browser.", flush=True)

@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import signal
 import sys
+import threading
 
 from playwright.async_api import Error as BrowserError
 
@@ -21,7 +22,7 @@ from .locks import locked
 from .service import retry_pending, submit_extract_password, watch
 from .storage import make_storage, LocalClient
 from .telegram import TelegramBrowser, TelegramError, safe_filename
-from .ui import banner, color, panel, panel_row, dashboard
+from .ui import banner, color, panel, panel_row, dashboard, message
 
 
 def setup(settings):
@@ -99,13 +100,13 @@ def first_run(settings):
             from .drive import _save_and_check_drive
             login_hosted(settings, _save_and_check_drive)
         except (StorageError, ValueError, OSError) as exc:
-            print("Google Drive sign-in did not finish: " + str(exc))
-            print("You can retry with menu option 6 or papa-tdl drive-login.")
+            message("Google Drive sign-in did not finish: " + str(exc), "error")
+            message("Retry with menu option 6 or papa-tdl drive-login.", "info")
     if ask_yes("Connect Telegram now (phone + code)?"):
         try:
             run_async(telegram_login(settings))
         except (TelegramError, OSError) as exc:
-            print("Telegram sign-in did not finish. Retry later with papa-tdl login.")
+            message("Telegram sign-in did not finish. Retry with papa-tdl login.", "error")
     panel("Ready for the next step", ["1. Check the destination: papa-tdl check",
           "2. Start watching: papa-tdl start",
           "3. See transfers: papa-tdl logs -f"])
@@ -168,6 +169,13 @@ def parser():
 
 
 def run_async(coroutine):
+    interrupted = False
+
+    def interrupt(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
+        raise KeyboardInterrupt
+
     async def runner():
         loop = asyncio.get_running_loop()
         task = asyncio.current_task()
@@ -182,7 +190,23 @@ def run_async(coroutine):
         finally:
             if can_handle_signal:
                 loop.remove_signal_handler(signal.SIGTERM)
-    return asyncio.run(runner())
+    previous = None
+    installed = False
+    try:
+        if threading.current_thread() is threading.main_thread():
+            previous = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, interrupt)
+            installed = True
+        return asyncio.run(runner())
+    except BaseException as exc:
+        # Browser cleanup can surface its own exception after Ctrl+C.  The
+        # operator action is still a clean return to the menu.
+        if interrupted:
+            raise KeyboardInterrupt from None
+        raise exc
+    finally:
+        if installed:
+            signal.signal(signal.SIGINT, previous)
 
 
 def run(args, settings):

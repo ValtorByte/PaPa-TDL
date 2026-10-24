@@ -44,6 +44,19 @@ def status(ready, ready_text="connected", missing_text="not connected"):
     return color(f"{mark} {label}", "1;92" if ready else "1;93")
 
 
+def message(text, level="info", *, stream=None):
+    """Print one semantic, color-safe status line."""
+    stream = stream or (sys.stderr if level == "error" else sys.stdout)
+    styles = {
+        "success": ("✓", "1;92"), "error": ("✗", "1;91"),
+        "warning": ("!", "1;93"), "info": ("›", "1;96"),
+    }
+    mark, code = styles.get(level, styles["info"])
+    if not unicode_terminal():
+        mark = {"✓": "+", "✗": "x", "›": ">"}.get(mark, mark)
+    print(color(f"{mark} {text}", code, stream=stream), file=stream, flush=True)
+
+
 class ProgressBar:
     """One-line terminal progress; log-friendly when output is redirected."""
 
