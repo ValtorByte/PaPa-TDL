@@ -33,7 +33,7 @@ repo=${PAPA_TDL_REPO:-ValtorByte/PaPa-TDL}
 ref=${PAPA_TDL_REF:-main}
 [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo 'Invalid repository.' >&2; exit 1; }
 [[ "$ref" =~ ^[A-Za-z0-9_./-]+$ && "$ref" != -* && "$ref" != *..* ]] || { echo 'Invalid Git ref.' >&2; exit 1; }
-printf '\n\033[95m  PaPa-TDL / INSTALLER 1.5.0\033[0m\n  Telegram files → Drive or local storage\n\n'
+printf '\n\033[95m  PaPa-TDL / INSTALLER 1.5.1\033[0m\n  Telegram files → Drive or local storage\n\n'
 echo '[1/5] Preparing the host...'
 root=0
 [[ $(id -u) == 0 ]] && root=1
@@ -98,7 +98,7 @@ if ! flock -n "$install_lock"; then
   exit 1
 fi
 if (( root )); then chown "$run_as:$(id -gn "$run_as")" "$data_dir/app.lock"; fi
-stage=$(mktemp -d "$prefix/releases/1.5.0-XXXXXXXX")
+stage=$(mktemp -d "$prefix/releases/1.5.1-XXXXXXXX")
 chmod 755 "$stage"
 temporary_source=''
 completed=0
@@ -143,14 +143,47 @@ env -u PYTHONPATH -u PYTHONHOME -u PIP_TARGET -u PIP_PREFIX -u PIP_USER \
   "$stage/venv/bin/python" -m pip install --no-deps "$stage/app"
 echo '[4/5] Installing Chromium...'
 export PLAYWRIGHT_BROWSERS_PATH="$stage/browsers"
-if (( skip_deps )); then
-  "$stage/venv/bin/python" -m playwright install chromium
+find_system_browser() {
+  local candidate
+  for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+system_browser=$(find_system_browser || true)
+if [[ -n "$system_browser" ]]; then
+  echo "Using system browser: $system_browser"
 else
-  if (( root )); then
-    "$stage/venv/bin/python" -m playwright install --with-deps chromium
+  playwright_ok=0
+  if (( skip_deps )); then
+    "$stage/venv/bin/python" -m playwright install chromium && playwright_ok=1
+  elif (( root )); then
+    "$stage/venv/bin/python" -m playwright install --with-deps chromium && playwright_ok=1
   else
     "$stage/venv/bin/python" -m playwright install-deps chromium
-    "$stage/venv/bin/python" -m playwright install chromium
+    "$stage/venv/bin/python" -m playwright install chromium && playwright_ok=1
+  fi
+  if (( ! playwright_ok )); then
+    echo 'Playwright CDN is unavailable; trying the official system Chrome package...'
+    if [[ $(uname -m) == x86_64 && $skip_deps == 0 ]]; then
+      chrome_deb="$stage/google-chrome-stable_current_amd64.deb"
+      if curl --proto '=https' --tlsv1.2 -fsSL --retry 3 \
+          https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+          -o "$chrome_deb"; then
+        "${privilege[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y "$chrome_deb" || true
+      fi
+      system_browser=$(find_system_browser || true)
+    fi
+    if [[ -z "$system_browser" ]]; then
+      echo 'ERROR: No Chromium browser could be installed.' >&2
+      echo 'The Playwright CDN and the Chrome fallback are unavailable from this server.' >&2
+      echo 'Install chromium/google-chrome, then run this installer again.' >&2
+      exit 1
+    fi
+    echo "Using system browser: $system_browser"
   fi
 fi
 echo '[5/5] Activating the launcher...'
@@ -162,12 +195,18 @@ launcher="$stage/papa-tdl"
   printf 'runtime_user=%q\n' "$run_as"
   printf 'program=%q\n' "$prefix/current"
   printf 'default_data=%q\n' "$data_dir"
+  printf 'system_browser=%q\n' "$system_browser"
   cat <<'WRAPPER'
 export TDL_DATA_DIR=${TDL_DATA_DIR:-"$default_data"}
 export PLAYWRIGHT_BROWSERS_PATH="$program/browsers"
+if [[ -n "$system_browser" ]]; then
+  export TDL_CHROMIUM_EXECUTABLE="$system_browser"
+fi
 if [[ $(id -u) == 0 && "$runtime_user" != root ]]; then
   exec runuser -u "$runtime_user" -- env TDL_DATA_DIR="$TDL_DATA_DIR" \
-    PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" "$program/venv/bin/python" -m tdl_watcher "$@"
+    PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
+    TDL_CHROMIUM_EXECUTABLE="${TDL_CHROMIUM_EXECUTABLE:-}" \
+    "$program/venv/bin/python" -m tdl_watcher "$@"
 fi
 if [[ $(id -un) != "$runtime_user" ]]; then
   echo "This installation belongs to $runtime_user. Run it as that user." >&2

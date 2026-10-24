@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "papa-tdl"
-version = "1.5.0"
+version = "1.5.1"
 description = "Save Telegram files to your VPS or Google Drive with a private persistent login"
 readme = "README.md"
 requires-python = ">=3.11"

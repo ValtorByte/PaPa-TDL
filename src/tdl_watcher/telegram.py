@@ -3,6 +3,7 @@
 import asyncio
 import getpass
 import math
+import os
 import re
 import shutil
 import time
@@ -70,6 +71,15 @@ class TelegramBrowser:
     async def start(self) -> None:
         await self.stop()
         self.playwright = await async_playwright().start()
+        launch_options = {}
+        executable = os.environ.get("TDL_CHROMIUM_EXECUTABLE", "").strip()
+        if executable:
+            executable_path = Path(executable)
+            if not executable_path.is_file():
+                raise TelegramError(
+                    f"Configured browser does not exist: {executable_path}. Reinstall PaPa-TDL."
+                )
+            launch_options["executable_path"] = str(executable_path)
         self.context = await self.playwright.chromium.launch_persistent_context(
             str(self.settings.data_dir / "browser-profile"), headless=True,
             accept_downloads=True,
@@ -77,6 +87,7 @@ class TelegramBrowser:
             viewport={"width": 1100, "height": 800}, locale="en-US",
             ignore_https_errors=False, service_workers="allow",
             args=["--disable-dev-shm-usage"], timeout=60000,
+            **launch_options,
         )
         self.context.set_default_timeout(20000)
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
