@@ -2,6 +2,7 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 from tdl_watcher.ui import ProgressBar, color, status
+from tdl_watcher.telegram import size_matches_estimate
 
 
 class TerminalTests(unittest.TestCase):
@@ -36,3 +37,8 @@ class TerminalTests(unittest.TestCase):
         with patch.dict(os.environ, {'NO_COLOR': '1'}):
             self.assertIn('connected', status(True))
             self.assertIn('not connected', status(False))
+
+    def test_telegram_size_rounding_is_allowed_but_truncation_is_rejected(self):
+        estimate = 1000 * 1024 * 1024
+        self.assertTrue(size_matches_estimate(estimate - 64 * 1024, estimate))
+        self.assertFalse(size_matches_estimate(estimate - 128 * 1024, estimate))

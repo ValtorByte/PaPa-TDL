@@ -1,15 +1,18 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+import sys
 from unittest.mock import AsyncMock, patch
 import zipfile
 
 from tdl_watcher.common import StorageError
 from tdl_watcher.config import Settings
 from tdl_watcher.extract import (InvalidArchivePassword, PasswordRequired,
-                                 _safe_member, batch_folder_name, extract_archives)
+                                 _run_secret_pty, _safe_member, _unrar_error,
+                                 _seven_zip_error, batch_folder_name, extract_archives)
 from tdl_watcher.storage import LocalClient
 from tdl_watcher.service import (_archive_group, _load_control, _process_extract_commands,
                                  _same_staged_media, _save_control, _batch_root)
@@ -22,6 +25,21 @@ class ExtractionTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.archives = self.root / "archives"
         self.archives.mkdir()
+
+    @unittest.skipUnless(os.name == "posix", "PTY password handoff requires POSIX")
+    def test_native_password_prompt_uses_pty_without_echoing_secret(self):
+        helper = self.root / "password_helper.py"
+        helper.write_text(
+            "import getpass, sys\n"
+            "value = getpass.getpass('Enter password: ')\n"
+            "print('accepted' if value == 'correct-secret' else 'rejected')\n"
+            "raise SystemExit(0 if value == 'correct-secret' else 11)\n"
+        )
+        result = _run_secret_pty([sys.executable, str(helper)], "correct-secret",
+                                 env=dict(os.environ), timeout=5)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("accepted", result.stdout)
+        self.assertNotIn("correct-secret", result.stdout)
 
     def test_zip_batch_extracts_into_one_folder(self):
         with zipfile.ZipFile(self.archives / "course.zip", "w") as archive:
@@ -62,6 +80,14 @@ class ExtractionTests(unittest.TestCase):
             with self.assertRaises(InvalidArchivePassword) as raised:
                 extract_archives(self.archives, self.root / "two", "top-secret")
         self.assertNotIn("top-secret", str(raised.exception))
+
+    def test_encrypted_truncated_archive_is_not_reported_as_wrong_password(self):
+        result = __import__("subprocess").CompletedProcess(
+            [], 2, "Flags: encrypted\nUnexpected end of archive"
+        )
+        for handler in (_unrar_error, _seven_zip_error):
+            with self.assertRaisesRegex(StorageError, "incomplete|truncated"):
+                handler(result, "correct-password")
 
     def test_local_tree_save_is_idempotent(self):
         output = self.root / "saved"

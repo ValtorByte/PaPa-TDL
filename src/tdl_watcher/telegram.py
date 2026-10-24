@@ -61,6 +61,11 @@ def estimated_bytes(label: str) -> int:
     return math.ceil(max(sizes)) if sizes else 0
 
 
+def size_matches_estimate(actual: int, estimate: int) -> bool:
+    """Allow Telegram's one-decimal display rounding, but reject truncated downloads."""
+    return not estimate or abs(int(actual) - int(estimate)) <= max(96 * 1024, int(estimate * 0.00005))
+
+
 class TelegramBrowser:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -273,7 +278,8 @@ class TelegramBrowser:
                             item.querySelector('.document-name, .audio-title')?.textContent ||
                             item.innerText?.slice(0, 100) || 'media';
               const docId = document?.getAttribute('data-doc-id') || null;
-              result.push({peer, mid, kind, label, doc_id: docId, album: bubble.dataset.mid});
+              const size = item.querySelector('.document-size, .document-description')?.textContent || '';
+              result.push({peer, mid, kind, label, size, doc_id: docId, album: bubble.dataset.mid});
             }
           }
           return result;
@@ -451,6 +457,10 @@ class TelegramBrowser:
             browser_path = Path(browser_path)
             if not browser_path.is_file() or browser_path.stat().st_size <= 0:
                 raise TelegramError("Telegram Web produced an empty or missing file.")
+            if estimate and not size_matches_estimate(browser_path.stat().st_size, estimate):
+                raise TelegramError(
+                    f"Telegram Web returned an incomplete file ({browser_path.stat().st_size} of about {estimate} bytes)."
+                )
             if self.settings.max_download_bytes and browser_path.stat().st_size > self.settings.max_download_bytes:
                 raise TelegramError("Telegram media exceeds TDL_MAX_DOWNLOAD_BYTES.")
             filename = safe_filename(downloaded.suggested_filename, f"telegram_{mid}.bin")

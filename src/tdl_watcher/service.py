@@ -18,7 +18,8 @@ from .common import StorageError
 from .extract import (InvalidArchivePassword, PasswordRequired, PART_RE, ARCHIVE_RE,
                       EXTRACT_ENGINE_VERSION, batch_folder_name, extract_archives)
 from .storage import make_storage
-from .telegram import TelegramBrowser, TelegramError, safe_filename
+from .telegram import (TelegramBrowser, TelegramError, estimated_bytes,
+                       safe_filename, size_matches_estimate)
 
 
 PENDING_RE = re.compile(r"^([1-9][0-9]{0,16})_([1-9][0-9]{0,19})$")
@@ -215,6 +216,11 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
                 batch["done_mid"] = None
                 batch["awaiting_more"] = False
                 batch.pop("last_attempt_signature", None)
+        if event["mid"] in known:
+            batch.setdefault("media_meta", {}).setdefault(event["mid"], {}).update({
+                "doc_id": event.get("doc_id"), "label": event.get("label", ""),
+                "size": event.get("size", ""),
+            })
     batch["media"].sort(key=int)
     _save_control(settings, control)
 
@@ -243,7 +249,16 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
     specs = {event["mid"]: event for event in media}
     for mid in batch["media"]:
         if mid in batch["downloaded"]:
-            continue
+            staged_path = incoming / batch["downloaded"][mid]
+            estimate = estimated_bytes(batch.get("media_meta", {}).get(mid, {}).get("size", ""))
+            if staged_path.is_file() and size_matches_estimate(staged_path.stat().st_size, estimate):
+                continue
+            staged_path.unlink(missing_ok=True)
+            batch["downloaded"].pop(mid, None)
+            batch.pop("last_attempt_signature", None)
+            batch["awaiting_more"] = False
+            print(f"Archive part {mid} is incomplete; downloading it again.", flush=True)
+            _save_control(settings, control)
         spec = specs.get(mid)
         if not spec:
             if batch.get("done_mid"):
@@ -278,7 +293,8 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         batch.setdefault("download_retry_at", {}).pop(mid, None)
         batch["downloaded"][mid] = path.name
         batch.setdefault("media_meta", {}).setdefault(mid, {
-            "doc_id": spec.get("doc_id"), "label": spec.get("label", "")
+            "doc_id": spec.get("doc_id"), "label": spec.get("label", ""),
+            "size": spec.get("size", "")
         })
         _save_control(settings, control)
         return True  # Telegram's rendered message list may have changed.

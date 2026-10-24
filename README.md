@@ -205,7 +205,7 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.4`. A cached older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.5`. A cached older `main` script will still run the older installer.
 
 If the Playwright browser CDN returns a regional 403, the installer automatically uses an existing system browser or tries the official Chrome system package. The selected executable is saved in the launcher, so normal runs do not download a browser again.
 
@@ -216,7 +216,7 @@ If the Playwright browser CDN returns a regional 403, the installer automaticall
 | `papa-tdl: command not found` after a failed install | Finish installation successfully first. For a non-root install, also add `~/.local/bin` to PATH. |
 | `System has not been booted with systemd` | The native installer does not call systemctl. Use `papa-tdl start/stop/status` instead. |
 | Drive is not connected | Run `papa-tdl drive-login`, approve the browser link and wait for `Google Drive connected`; or select local in setup. |
-| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.6.4 and use papa-tdl drive-login. |
+| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.6.5 and use papa-tdl drive-login. |
 | No Google login URL appears | Check connectivity to the PaPa-TDL authentication service and retry. Users do not need an OAuth JSON for hosted sign-in. |
 | OAuth JSON cannot be read | Move it out of `/root` to the private data directory and assign it to the runtime user. |
 | Google approved, but the VPS times out | Keep drive-login running and use a fresh link if it expires. SSH forwarding is needed only for the optional --method browser flow. |

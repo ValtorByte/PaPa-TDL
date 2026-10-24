@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import errno
 import os
+import pty
 import re
+import select
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from pathlib import PurePosixPath, PureWindowsPath
@@ -15,7 +19,7 @@ from .common import StorageError
 from .telegram import safe_filename
 from .ui import ProgressBar
 
-EXTRACT_ENGINE_VERSION = 2
+EXTRACT_ENGINE_VERSION = 3
 
 
 class PasswordRequired(StorageError):
@@ -145,32 +149,104 @@ def _seven_zip_error(result: subprocess.CompletedProcess, password: str | None) 
     output = result.stdout.lower()
     if result.returncode == 0:
         return
-    if any(value in output for value in ("wrong password", "password is incorrect", "enter password", "encrypted")):
-        if password:
-            raise InvalidArchivePassword("The archive password was rejected.")
-        raise PasswordRequired("This extraction batch requires a password.")
+    if password and any(value in output for value in ("wrong password", "password is incorrect")):
+        raise InvalidArchivePassword("The archive password was rejected.")
     if any(value in output for value in ("missing volume", "unexpected end", "cannot find", "no such file")):
-        raise StorageError("An archive volume is missing or truncated; check all downloaded parts.")
+        raise StorageError("An archive volume is incomplete, missing, or truncated; it must be downloaded again.")
+    if not password and any(value in output for value in ("enter password", "encrypted")):
+        raise PasswordRequired("This extraction batch requires a password.")
     if "unsupported method" in output:
         raise StorageError("The installed 7-Zip cannot decode this archive; install a current RAR-capable 7-Zip or unrar.")
     raise StorageError(f"7-Zip failed (exit {result.returncode}); check archive integrity and installed codec support.")
 
 
 def _run_unrar(arguments: list[str], password: str | None) -> subprocess.CompletedProcess:
-    # Never let an unattended native tool open its own invisible password prompt.
-    arguments = [*arguments[:1], *([] if password else ["-p-"]), *arguments[1:]]
-    return subprocess.run(["unrar", *arguments], input=(password or "") + "\n", text=True,
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=24 * 60 * 60,
-                          env={**os.environ, "LANG": "C", "LC_ALL": "C"})
+    command = ["unrar", *arguments[:1], *([] if password else ["-p-"]), *arguments[1:]]
+    env = {**os.environ, "LANG": "C", "LC_ALL": "C"}
+    if not password:
+        return subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=24 * 60 * 60, env=env)
+    if os.name != "posix":
+        raise StorageError("Secure RAR password entry requires a POSIX terminal or 7-Zip.")
+    return _run_secret_pty(command, password, env=env, timeout=24 * 60 * 60)
+
+
+def _run_secret_pty(command: list[str], password: str, *, env: dict[str, str],
+                    timeout: float) -> subprocess.CompletedProcess:
+    """Answer one native password prompt through a PTY without exposing the secret."""
+    master, slave = pty.openpty()
+    process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
+                               env=env, close_fds=True)
+    os.close(slave)
+    output = bytearray()
+    prompt_buffer = bytearray()
+    sent = False
+    deadline = time.monotonic() + timeout
+    # Native unrar includes the full archive path in this prompt, which may be
+    # much longer than a normal terminal line.
+    # unrar can emit this prompt in many tiny writes; answer as soon as its
+    # unambiguous prefix is available instead of waiting for the final colon.
+    prompt = re.compile(rb"(?i)(enter\s+password|password\s+(?:required|needed))")
+    try:
+        while True:
+            if time.monotonic() >= deadline:
+                process.kill()
+                process.wait()
+                raise StorageError("Archive extraction timed out; downloaded parts were retained.")
+            ready, _, _ = select.select([master], [], [], 0.2)
+            if ready:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                    chunk = b""
+                if chunk:
+                    output.extend(chunk)
+                    prompt_buffer.extend(chunk)
+                    if len(prompt_buffer) > 4096:
+                        del prompt_buffer[:-4096]
+                    if prompt.search(bytes(prompt_buffer)):
+                        if sent:
+                            process.terminate()
+                        else:
+                            os.write(master, password.encode("utf-8") + b"\n")
+                            sent = True
+                            prompt_buffer.clear()
+            if process.poll() is not None:
+                while True:
+                    try:
+                        chunk = os.read(master, 65536)
+                    except OSError as exc:
+                        if exc.errno == errno.EIO:
+                            break
+                        raise
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+                break
+        return subprocess.CompletedProcess(command, process.returncode,
+                                           output.decode("utf-8", errors="replace"))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        os.close(master)
 
 
 def _unrar_error(result: subprocess.CompletedProcess, password: str | None) -> None:
     if result.returncode == 0:
         return
     output = result.stdout.lower()
-    if result.returncode == 11 or "password" in output or "encrypted" in output:
+    if result.returncode == 11:
         if password:
             raise InvalidArchivePassword("The archive password was rejected.")
+        raise PasswordRequired("This extraction batch requires a password.")
+    if password and ("wrong password" in output or "password is incorrect" in output):
+        raise InvalidArchivePassword("The archive password was rejected.")
+    if "unexpected end" in output or "missing volume" in output or "cannot find volume" in output:
+        raise StorageError("An archive volume is incomplete, missing, or truncated; it must be downloaded again.")
+    if not password and ("password" in output or "encrypted" in output):
         raise PasswordRequired("This extraction batch requires a password.")
     reasons = {3: "Archive checksum failed; a part is damaged or truncated.",
                5: "Archive output could not be written; check free disk space and permissions.",

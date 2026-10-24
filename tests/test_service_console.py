@@ -17,7 +17,7 @@ from tdl_watcher.service import (_save_control, _load_control, _consume_extract_
                                   _process_extract_commands, _batch_root)
 from tdl_watcher.extract import InvalidArchivePassword
 from tdl_watcher.storage import LocalClient
-from tdl_watcher.ui import panel_row
+from tdl_watcher.ui import ANSI_RE, panel_row
 
 
 class ServiceConsoleTests(unittest.TestCase):
@@ -88,15 +88,15 @@ class ServiceConsoleTests(unittest.TestCase):
         pause.assert_not_called()
 
     def test_cards_fit_narrow_and_wide_terminals(self):
-        for width in (40, 80, 140):
+        for width in (16, 24, 40, 80, 120, 160):
             output = io.StringIO()
             with patch('tdl_watcher.ui.shutil.get_terminal_size', return_value=os.terminal_size((width, 40))), \
                  contextlib.redirect_stdout(output):
                 panel_row([('Accounts', ['Telegram: connected'], '95'),
                            ('Storage', ['Drive / TDL'], '36'), ('Service', ['Running'], '35')])
             lines = output.getvalue().splitlines()
-            self.assertTrue(all(len(line) <= width for line in lines))
-            if width == 140:
+            self.assertTrue(all(len(ANSI_RE.sub('', line)) <= width for line in lines))
+            if width == 160:
                 self.assertTrue(any('ACCOUNTS' in line and 'STORAGE' in line and 'SERVICE' in line for line in lines))
 
     @unittest.skipUnless(os.name == 'posix', 'Controlling terminal fixture requires POSIX')

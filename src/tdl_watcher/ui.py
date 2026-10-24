@@ -84,16 +84,23 @@ class ProgressBar:
         if total is not None:
             self.total = int(total or 0)
         current = max(0, int(current or 0))
+        columns = _terminal_columns(self.stream) if self.tty else 160
+        bar_width = min(self.width, max(6, columns - 58))
         if self.total:
             ratio = min(1.0, current / self.total)
-            filled = round(self.width * ratio)
-            bar = "█" * filled + "░" * (self.width - filled) if unicode_terminal() else "#" * filled + "-" * (self.width - filled)
-            text = f"{self.label:<18} [{bar}] {ratio:>6.1%}  {self._size(current)} / {self._size(self.total)}"
+            filled = round(bar_width * ratio)
+            bar = "█" * filled + "░" * (bar_width - filled) if unicode_terminal() else "#" * filled + "-" * (bar_width - filled)
+            if columns < 58:
+                text = f"{self.label} {ratio:.1%} {self._size(current)}/{self._size(self.total)}"
+            else:
+                text = f"{self.label:<18} [{bar}] {ratio:>6.1%}  {self._size(current)} / {self._size(self.total)}"
         else:
             pulse = "∙●∙" if unicode_terminal() else "..."
             text = f"{self.label:<18} [{pulse}]  {self._size(current)}"
         if detail:
             text += "  " + detail
+        if self.tty:
+            text = _fit(text, columns)
         if text == self.last_text:
             return
         now = time.monotonic()
@@ -112,7 +119,10 @@ class ProgressBar:
         if self.tty and self.last_text:
             self.stream.write("\r" + " " * len(self.last_text) + "\r")
         mark = "✓" if success and unicode_terminal() else ("+" if success else "!")
-        print(color(f"{mark} {self.label}: {text}", "1;92" if success else "1;91", stream=self.stream),
+        final = f"{mark} {self.label}: {text}"
+        if self.tty:
+            final = _fit(final, _terminal_columns(self.stream))
+        print(color(final, "1;92" if success else "1;91", stream=self.stream),
               file=self.stream, flush=True)
         self.closed = True
 
@@ -145,6 +155,24 @@ def banner():
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def _terminal_columns(stream=None):
+    stream = stream or sys.stdout
+    try:
+        columns = os.get_terminal_size(stream.fileno()).columns
+    except (AttributeError, OSError, TypeError, ValueError):
+        columns = shutil.get_terminal_size((80, 24)).columns
+    return max(12, columns)
+
+
+def _fit(value, width):
+    """Return a plain terminal-safe line that never exceeds width."""
+    value = ANSI_RE.sub("", str(value)).replace("\n", " ")
+    if len(value) <= width:
+        return value
+    marker = "…" if unicode_terminal() else "..."
+    return value[:max(0, width - len(marker))] + marker
+
+
 def _panel_lines(title, lines, width, accent="35"):
     utf = unicode_terminal()
     tl, tr, bl, br, side, bar = ("╭", "╮", "╰", "╯", "│", "─") if utf else ("+", "+", "+", "+", "|", "-")
@@ -164,14 +192,20 @@ def _panel_lines(title, lines, width, accent="35"):
 
 
 def panel(title, lines, width=72):
-    width = max(16, min(width, shutil.get_terminal_size((80, 24)).columns - 2))
+    width = max(12, min(width, _terminal_columns() - 1))
     print("\n".join(_panel_lines(title, lines, width)))
 
 
 def panel_row(cards):
     """Adapt horizontal cards to terminal width without ANSI alignment errors."""
-    columns = max(20, min(160, shutil.get_terminal_size((80, 24)).columns - 2))
-    count = min(len(cards), 3 if columns >= 120 else 2 if columns >= 76 else 1)
+    columns = min(160, _terminal_columns() - 1)
+    if columns < 24:
+        for title, lines, _ in cards:
+            print(color(title.upper(), "1;96"))
+            for line in lines:
+                print("  " + _fit(line, max(1, columns - 2)))
+        return
+    count = min(len(cards), 3 if columns >= 150 else 2 if columns >= 100 else 1)
     width = (columns - 2 * (count - 1)) // count
     for offset in range(0, len(cards), count):
         group = cards[offset:offset + count]
