@@ -236,6 +236,46 @@ class TransferTests(unittest.TestCase):
                 asyncio.run(watch(self.settings, once=True))
         self.assertEqual(path.read_bytes(), b'important')
 
+    def test_failed_pending_transfer_does_not_block_another_pending_file(self):
+        first = self.settings.pending_dir / '123_11'
+        second = self.settings.pending_dir / '123_12'
+        first.mkdir()
+        second.mkdir()
+        (first / 'bad.bin').write_bytes(b'bad')
+        (second / 'good.bin').write_bytes(b'good')
+        storage = MagicMock()
+        storage.upload.side_effect = [StorageError('temporary failure'),
+                                      {'id': 'saved', 'name': 'good.bin', 'size': '4'}]
+        asyncio.run(retry_pending(self.settings, storage, 'folder',
+                                  continue_on_error=True))
+        self.assertTrue((first / 'bad.bin').exists())
+        self.assertFalse(second.exists())
+
+    def test_archive_completion_does_not_skip_regular_file_in_same_scan(self):
+        browser = MagicMock()
+        browser.start = AsyncMock()
+        browser.stop = AsyncMock()
+        browser.find_group = AsyncMock(return_value='-123')
+        browser.logged_in = AsyncMock(return_value=True)
+        browser.visible_events = AsyncMock(return_value=[
+            {'mid': '11', 'peer': '-123', 'kind': 'bubble', 'type': 'media',
+             'label': 'archive.zip'},
+            {'mid': '12', 'peer': '-123', 'kind': 'bubble', 'type': 'media',
+             'label': 'ordinary.bin'},
+        ])
+        browser.download = AsyncMock(return_value=self.settings.pending_dir / '123_12' / 'ordinary.bin')
+        storage = MagicMock()
+        storage.choose_folder.return_value = 'folder'
+        storage.find_message.return_value = None
+        with patch('tdl_watcher.service.TelegramBrowser', return_value=browser), \
+             patch('tdl_watcher.service.make_storage', return_value=storage), \
+             patch('tdl_watcher.service._process_extract_commands', new=AsyncMock(return_value=True)), \
+             patch('tdl_watcher.service.retry_pending', new=AsyncMock()), \
+             patch('tdl_watcher.service._pause_or_stop', new=AsyncMock(return_value=True)):
+            asyncio.run(watch(self.settings))
+        browser.download.assert_awaited_once()
+        self.assertEqual(browser.download.await_args.args[0]['mid'], '12')
+
     def test_real_setup_saves_chosen_local_path(self):
         output = Path(self.temp.name) / 'selected output'
         env = dict(os.environ, TDL_DATA_DIR=self.temp.name, TDL_DESTINATION='local')
@@ -349,8 +389,23 @@ class GoogleTests(unittest.TestCase):
         self.assertEqual(files.create.call_args.kwargs['body']['id'], 'stable-id')
         self.assertEqual(item['size'], '5')
         files.get.return_value.execute.return_value['size'] = '99'
-        with self.assertRaisesRegex(StorageError, 'size verification'):
+        with self.assertRaisesRegex(StorageError, 'different file'):
             storage.upload(path, 'folder', '-123', '46', existing_upload_id='stable-id')
+
+    def test_drive_uncertain_upload_completion_reuses_reserved_id(self):
+        api = MagicMock()
+        files = api.files.return_value
+        files.list.return_value.execute.return_value = {'files': []}
+        path = self.settings.data_dir / 'data.txt'
+        path.write_bytes(b'hello')
+        files.get.return_value.execute.return_value = {
+            'id': 'stable-id', 'name': 'data.txt', 'size': '5',
+            'md5Checksum': hashlib.md5(b'hello').hexdigest(),
+            'parents': ['folder'], 'trashed': False}
+        item = DriveClient(self.settings, api=api).upload(
+            path, 'folder', '-123', '45', existing_upload_id='stable-id')
+        self.assertEqual(item['id'], 'stable-id')
+        files.create.assert_not_called()
 
     def test_drive_same_size_corrupt_upload_is_not_success(self):
         api = MagicMock()
@@ -372,9 +427,35 @@ class GoogleTests(unittest.TestCase):
         files.create.return_value.execute.return_value = {'id': 'folder'}
         storage = DriveClient(self.settings, api=api)
         self.assertEqual(storage.choose_folder(), 'folder')
-        files.list.return_value.execute.return_value = {'files': [{'id': 'folder'}]}
+        files.get.return_value.execute.return_value = {
+            'id': 'folder', 'mimeType': 'application/vnd.google-apps.folder',
+            'trashed': False}
         self.assertEqual(storage.choose_folder(), 'folder')
         self.assertEqual(files.create.call_count, 1)
+        self.assertEqual(files.list.call_count, 1)
+        self.assertEqual(json.loads((self.settings.data_dir / 'drive-folder.json').read_text())['id'],
+                         'folder')
+
+    def test_drive_link_is_private_until_explicit_public_opt_in(self):
+        api = MagicMock()
+        files = api.files.return_value
+        permissions = api.permissions.return_value
+        files.get.return_value.execute.return_value = {
+            'id': 'file123', 'name': 'example.bin', 'size': '4',
+            'mimeType': 'application/octet-stream', 'trashed': False}
+        permissions.list.return_value.execute.side_effect = [
+            {'permissions': []}, {'permissions': []},
+            {'permissions': [{'type': 'anyone', 'role': 'reader'}]}]
+        client = DriveClient(self.settings, api=api)
+        private = client.link('file123')
+        self.assertEqual(private['sharing'], 'private')
+        self.assertIsNone(private['direct_download_url'])
+        permissions.create.assert_not_called()
+        public = client.link('file123', make_public=True)
+        self.assertEqual(public['sharing'], 'anyone with the link')
+        self.assertIn('export=download&id=file123', public['direct_download_url'])
+        self.assertEqual(permissions.create.call_args.kwargs['body'],
+                         {'type': 'anyone', 'role': 'reader'})
 
     def test_config_defaults_to_drive_and_environment_overrides_saved_config(self):
         (self.settings.data_dir / 'config.json').write_text('{"TDL_DESTINATION":"drive","TDL_POLL_SECONDS":15}')

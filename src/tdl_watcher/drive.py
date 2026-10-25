@@ -22,6 +22,7 @@ from googleapiclient.http import MediaFileUpload
 
 from .common import CHUNK_SIZE, StorageError, remote_name, source_prefix, md5_file
 from .config import private_json
+from .health import record
 from .oauth_config import resolve_desktop_config
 from .telegram import safe_filename
 from .ui import ProgressBar, message
@@ -55,6 +56,7 @@ def _save_and_check_drive(settings, credentials) -> None:
             client.close()
     except (StorageError, OSError) as exc:
         raise StorageError(f"Google approved access and the token was saved, but Drive is not ready: {exc}") from None
+    record(settings, "drive")
     message(f"Google Drive connected. Destination folder ready: {folder}", "success")
 
 
@@ -226,6 +228,36 @@ class DriveClient:
     def close(self):
         self.api.close()
 
+    def link(self, file_id: str, *, make_public: bool = False) -> dict:
+        """Return an honest access link, optionally granting anyone read access."""
+        if not isinstance(file_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", file_id):
+            raise StorageError("Enter a valid Google Drive file ID.")
+        item = self._execute(self.api.files().get(
+            fileId=file_id, fields="id,name,mimeType,trashed,webViewLink,size",
+            supportsAllDrives=True))
+        if item.get("trashed") or item.get("mimeType") == "application/vnd.google-apps.folder":
+            raise StorageError("The selected Drive item is missing or is a folder.")
+        permissions = self._execute(self.api.permissions().list(
+            fileId=file_id, fields="permissions(id,type,role)", supportsAllDrives=True))
+        public = any(p.get("type") == "anyone" and p.get("role") in {"reader", "writer", "owner"}
+                     for p in permissions.get("permissions", []))
+        if make_public and not public:
+            self._execute(self.api.permissions().create(
+                fileId=file_id, body={"type": "anyone", "role": "reader"},
+                fields="id", supportsAllDrives=True))
+            permissions = self._execute(self.api.permissions().list(
+                fileId=file_id, fields="permissions(id,type,role)", supportsAllDrives=True))
+            public = any(p.get("type") == "anyone" and p.get("role") == "reader"
+                         for p in permissions.get("permissions", []))
+            if not public:
+                raise StorageError("Google Drive did not confirm public read access.")
+        return {"filename": item.get("name", "file"), "size": int(item.get("size", 0)),
+                "sharing": "anyone with the link" if public else "private",
+                "drive_url": item.get("webViewLink") or
+                             f"https://drive.google.com/file/d/{file_id}/view",
+                "direct_download_url":
+                    f"https://drive.google.com/uc?export=download&id={file_id}" if public else None}
+
     def _execute(self, request):
         try:
             return request.execute(num_retries=4)
@@ -256,14 +288,38 @@ class DriveClient:
             if item.get("trashed") or item.get("mimeType") != "application/vnd.google-apps.folder":
                 raise StorageError("Google destination must be an accessible folder.")
             return requested_id
+        saved_path = self.settings.data_dir / "drive-folder.json"
+        try:
+            saved_id = json.loads(saved_path.read_text(encoding="utf-8")).get("id")
+        except FileNotFoundError:
+            saved_id = None
+        except (OSError, ValueError, AttributeError):
+            raise StorageError("The saved Drive folder identity is damaged; inspect drive-folder.json.") from None
+        if saved_id is not None:
+            if not isinstance(saved_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", saved_id):
+                raise StorageError("The saved Drive folder identity is invalid.")
+            try:
+                item = self._execute(self.api.files().get(
+                    fileId=saved_id, fields="id,mimeType,trashed", supportsAllDrives=True))
+            except StorageError as exc:
+                if "HTTP 404" not in str(exc):
+                    raise
+                item = {"trashed": True}
+            if not item.get("trashed") and item.get("mimeType") == "application/vnd.google-apps.folder":
+                return saved_id
+            # A deleted folder must not be reported as a valid destination.
+            saved_path.unlink(missing_ok=True)
         matches = self._list("name = 'TDL' and 'root' in parents and trashed = false "
                              "and mimeType = 'application/vnd.google-apps.folder'")
         if len(matches) > 1:
             raise StorageError("Multiple accessible TDL folders; set GOOGLE_DRIVE_FOLDER_ID.")
         if matches:
-            return matches[0]["id"]
-        return self._execute(self.api.files().create(body={"name": "TDL",
-            "mimeType": "application/vnd.google-apps.folder"}, fields="id"))["id"]
+            folder_id = matches[0]["id"]
+        else:
+            folder_id = self._execute(self.api.files().create(body={"name": "TDL",
+                "mimeType": "application/vnd.google-apps.folder"}, fields="id"))["id"]
+        private_json(saved_path, json.dumps({"id": folder_id}))
+        return folder_id
 
     def find_message(self, folder_id, peer, mid):
         prefix = source_prefix(peer, mid)
@@ -290,6 +346,23 @@ class DriveClient:
             if current.get("md5Checksum") != local_md5:
                 raise StorageError("Existing Drive file checksum differs; local copy retained.")
             return current
+        if existing_upload_id:
+            # A completed upload may be absent from an eventually consistent
+            # name listing after its final response was lost. Check the stable
+            # reserved ID before attempting another create request.
+            try:
+                reserved = self._execute(self.api.files().get(
+                    fileId=existing_upload_id, fields="id,name,size,md5Checksum,trashed,parents",
+                    supportsAllDrives=True))
+            except StorageError as exc:
+                if "HTTP 404" not in str(exc):
+                    raise
+            else:
+                if (reserved.get("trashed") or folder_id not in reserved.get("parents", [])
+                        or int(reserved.get("size", -1)) != size
+                        or reserved.get("md5Checksum") != local_md5):
+                    raise StorageError("The reserved Drive upload ID refers to a different file; local copy retained.")
+                return reserved
         # A preallocated ID makes a retry after a lost completion response idempotent.
         file_id = existing_upload_id or self._execute(self.api.files().generateIds(count=1, space="drive"))["ids"][0]
         if not existing_upload_id and save_upload_id:
@@ -384,8 +457,8 @@ class DriveClient:
         if not files or any(item.is_symlink() for item in source.rglob("*")):
             raise StorageError("Extracted folder is empty or contains an unsafe link.")
         batch = self.find_batch(folder_id, batch_id)
-        if batch and batch.get("appProperties", {}).get("papaTdlComplete") == "1":
-            return batch
+        # Even a completed marker can outlive a manually deleted child file.
+        # Walk the source tree and verify every destination child on retry.
         if not batch:
             batch = self._execute(self.api.files().create(body={
                 "name": safe_filename(folder_name, "extracted"), "parents": [folder_id],

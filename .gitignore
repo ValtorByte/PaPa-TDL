@@ -24,6 +24,10 @@ downloads/
 config.json
 google-client.json
 google-token.json
+connection-health.json
+drive-folder.json
+extract-password.json
+archive-secret.sock
 watcher.pid
 *.lock.tmp
 google-*.json

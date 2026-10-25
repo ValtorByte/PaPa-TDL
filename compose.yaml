@@ -1,7 +1,7 @@
 services:
   tdl:
     build: .
-    image: papa-tdl:1.6.3
+    image: papa-tdl:1.6.6
     init: true
     user: "${TDL_UID:-1000}:${TDL_GID:-1000}"
     environment:
@@ -13,11 +13,9 @@ services:
     shm_size: 1gb
     stdin_open: true
     tty: true
-    ports:
-      - "127.0.0.1:53682:53682"
   watcher:
     build: .
-    image: papa-tdl:1.6.3
+    image: papa-tdl:1.6.6
     init: true
     user: "${TDL_UID:-1000}:${TDL_GID:-1000}"
     environment:

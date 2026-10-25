@@ -92,7 +92,7 @@ class FirstRunTests(unittest.TestCase):
             ('Google Drive folder ID', b'\n'),
             ('Open Google sign-in in your browser now?', b'n\n'),
             ('Connect Telegram now (phone + code)?', b'n\n'),
-            ('Choose [0-11]', b'0\n'),
+            ('Choose [0-12]', b'0\n'),
         ]
         next_prompt = 0
         try:

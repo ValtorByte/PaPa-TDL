@@ -158,7 +158,7 @@ def logs(settings, follow=False):
 
 def console(settings):
     """Attach the current terminal to logs and archive password requests."""
-    from .service import _load_control, submit_extract_password, PASSWORD_FILE
+    from .service import _load_control, submit_extract_password
     if not sys.stdin.isatty():
         raise ValueError("Open the live service in an interactive terminal.")
     if not _running(settings):
@@ -188,7 +188,7 @@ def console(settings):
             batch = _load_control(settings).get("batch")
             if batch and batch.get("awaiting_password"):
                 request = (batch["peer"], batch["start_mid"], batch.get("password_attempt", 0))
-                if request != prompted and not (settings.data_dir / PASSWORD_FILE).exists():
+                if request != prompted:
                     if progress_active:
                         print()
                         progress_active = False

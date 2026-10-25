@@ -220,14 +220,25 @@ def panel_row(cards):
 
 def dashboard(settings):
     from .background import _running
-    drive_ready = (settings.data_dir / "google-token.json").is_file()
+    from .health import verified_recently
+    drive_saved = (settings.data_dir / "google-token.json").is_file()
     profile = settings.data_dir / "browser-profile"
-    telegram_ready = profile.exists() and any(profile.iterdir())
+    telegram_saved = profile.exists() and any(profile.iterdir())
     running = _running(settings)
     disk = shutil.disk_usage(settings.data_dir)
+
+    def account_label(saved, verified):
+        if verified:
+            return status(True, "verified recently")
+        if saved:
+            return color("! saved; connection unverified", "1;93")
+        return color("· sign-in required" if unicode_terminal() else "- sign-in required", "1;93")
+
     panel_row([
-        ("01 / Accounts", ["Telegram  " + status(telegram_ready, "session saved", "sign-in required"),
-            "Google    " + status(drive_ready, "authorized", "sign-in required"),
+        ("01 / Accounts", ["Telegram  " + account_label(telegram_saved,
+                          telegram_saved and verified_recently(settings, "telegram")),
+            "Google    " + account_label(drive_saved,
+                          drive_saved and verified_recently(settings, "drive")),
             "Group     " + settings.group_name], "95"),
         ("02 / Destination", [color("GOOGLE DRIVE" if settings.destination == "drive" else "LOCAL SERVER", "1;96"),
             "Folder: " + (settings.drive_folder_id or "TDL") if settings.destination == "drive" else str(settings.local_root),

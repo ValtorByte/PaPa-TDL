@@ -84,7 +84,23 @@ class LocalClient:
             marker = path / ".papa-tdl-batch.json"
             if not path.is_symlink() and path.is_dir() and marker.is_file():
                 try:
-                    if json.loads(marker.read_text()).get("batch_id") == batch_id:
+                    saved = json.loads(marker.read_text())
+                    if saved.get("batch_id") != batch_id:
+                        continue
+                    manifest = saved.get("files")
+                    if manifest is not None:
+                        if not isinstance(manifest, dict) or not manifest:
+                            raise StorageError("A saved extraction manifest is invalid.")
+                        for name, size in manifest.items():
+                            file_path = path / name
+                            if (not isinstance(name, str) or not name
+                                    or not file_path.resolve().is_relative_to(path.resolve())
+                                    or file_path.is_symlink() or not file_path.is_file()
+                                    or file_path.stat().st_size != size):
+                                raise StorageError(
+                                    "A saved extraction folder is incomplete or changed; inspect it before retrying."
+                                )
+                    if saved.get("batch_id") == batch_id:
                         matches.append(path)
                 except (OSError, ValueError, AttributeError):
                     continue
@@ -92,7 +108,8 @@ class LocalClient:
             raise StorageError("Multiple local folders match this extraction batch.")
         if not matches:
             return None
-        total = sum(item.stat().st_size for item in matches[0].rglob("*") if item.is_file())
+        total = sum(item.stat().st_size for item in matches[0].rglob("*")
+                    if item.is_file() and item.name != ".papa-tdl-batch.json")
         return {"id": str(matches[0]), "name": matches[0].name, "size": total,
                 "webViewLink": None}
 
@@ -108,7 +125,8 @@ class LocalClient:
         destination = self.root / name
         if destination.exists():
             destination = self.root / f"{name} [{batch_id[-8:]}]"
-        marker_value = json.dumps({"batch_id": batch_id}, separators=(",", ":"))
+        manifest = {item.relative_to(source).as_posix(): item.stat().st_size for item in files}
+        marker_value = json.dumps({"batch_id": batch_id, "files": manifest}, separators=(",", ":"))
         if source.stat().st_dev == self.root.stat().st_dev:
             marker = source / ".papa-tdl-batch.json"
             marker.write_text(marker_value)

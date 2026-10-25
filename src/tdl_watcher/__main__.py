@@ -15,6 +15,7 @@ import threading
 from playwright.async_api import Error as BrowserError
 
 from .config import Settings, absolute_path, private_json
+from .health import record
 from . import __version__
 from .common import StorageError
 from .direct import download_url, url_identity
@@ -65,6 +66,9 @@ async def telegram_login(settings):
     try:
         await browser.start()
         await browser.login()
+        if not await browser.logged_in():
+            raise TelegramError("Telegram login could not be verified. Please retry.")
+        record(settings, "telegram")
     finally:
         await browser.stop()
 
@@ -127,16 +131,16 @@ def menu(settings):
             " 7  Storage settings", " 8  Check destination", "",
             "Send ZIP / RAR / 7z to TDL.", "Related parts group automatically."], "36"),
         ("Activity & controls", [" 9  Watcher status", "10  Open live activity",
-            color("11  Stop background service", "93"), " 0  Exit", "",
+            "11  Drive file link", color("12  Stop background service", "93"), " 0  Exit", "",
             "Ctrl+C returns to the menu.", "No extra Enter needed."], "35"),
     ])
-    choice = input(color("  Choose [0-11]: ", "1;95")).strip()
+    choice = input(color("  Choose [0-12]: ", "1;95")).strip()
     if choice == "0":
         return None
     commands = {"1": "console", "2": "select", "3": "watch", "4": "download", "5": "login", "6": "drive-login",
-                "7": "setup", "8": "check", "9": "status", "10": "console", "11": "stop"}
+                "7": "setup", "8": "check", "9": "status", "10": "console", "11": "share", "12": "stop"}
     if choice not in commands:
-        raise ValueError("Choose a menu number from 0 to 11.")
+        raise ValueError("Choose a menu number from 0 to 12.")
     command, argv = commands[choice], [commands[choice]]
     return argv
 
@@ -145,7 +149,7 @@ def parser():
     result = argparse.ArgumentParser(prog="papa-tdl", description="Save Telegram files on your VPS or Google Drive.")
     result.add_argument("--version", action="version", version=f"PaPa-TDL {__version__}")
     sub = result.add_subparsers(dest="command")
-    for command in ("setup", "login", "drive-login", "download", "telegram", "watch", "list", "select", "extract-password",
+    for command in ("setup", "login", "drive-login", "download", "telegram", "watch", "list", "select", "extract-password", "share",
                     "check", "retry", "start", "stop", "status", "logs", "console"):
         item = sub.add_parser(command)
         if command in {"download", "telegram", "watch", "list", "select", "check", "retry", "start"}:
@@ -165,6 +169,10 @@ def parser():
             item.add_argument("--port", type=int, default=53682)
         if command == "logs":
             item.add_argument("-f", "--follow", action="store_true")
+        if command == "share":
+            item.add_argument("file_id", nargs="?", help="Google Drive file ID; omit for interactive prompt")
+            item.add_argument("--public", action="store_true", help="Explicitly offer anyone with the link read access")
+            item.add_argument("--yes", action="store_true", help="Confirm --public without an interactive prompt")
     return result
 
 
@@ -248,6 +256,31 @@ def run(args, settings):
             raise ValueError("Message IDs must be comma-separated positive integers.")
         run_async(watch(settings, selected_ids=selected, once=once))
         return
+    if args.command == "share":
+        from .drive import DriveClient
+        if not args.file_id and not sys.stdin.isatty():
+            raise ValueError("Provide a Drive file ID or run this command in an interactive terminal.")
+        file_id = args.file_id or input("Google Drive file ID: ").strip()
+        if args.public:
+            warning = "This will make the file accessible to anyone who obtains the link."
+            message(warning, "warning")
+            if not args.yes:
+                if not sys.stdin.isatty() or input("Type PUBLIC to confirm: ").strip() != "PUBLIC":
+                    raise ValueError("Public sharing was not confirmed; file permissions were unchanged.")
+        client = DriveClient(settings)
+        try:
+            result = client.link(file_id, make_public=args.public)
+        finally:
+            client.close()
+        print(f"File: {safe_filename(result['filename'], 'file')} | {result['size']} bytes")
+        print("Sharing: " + result["sharing"])
+        print("Drive URL: " + result["drive_url"])
+        if result["direct_download_url"]:
+            print("Direct download URL: " + result["direct_download_url"])
+            print("Google may still require confirmation or enforce download quotas.")
+        else:
+            print("Anonymous direct download is unavailable while this file is private.")
+        return
     storage = make_storage(settings)
     try:
         folder_id = storage.choose_folder(settings.target_folder)
@@ -315,6 +348,9 @@ def execute(args):
             raise ValueError("Run papa-tdl extract-password in an interactive terminal; the password prompt must stay hidden.")
         password = getpass.getpass("Archive password (hidden): ")
         submit_extract_password(settings, password)
+        return
+    if args.command == "share":
+        run(args, settings)
         return
     try:
         with locked(settings.data_dir / "app.lock"):

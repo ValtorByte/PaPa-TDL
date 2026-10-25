@@ -1,16 +1,20 @@
 import asyncio
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 import sys
+import time
 from unittest.mock import AsyncMock, patch
 import zipfile
 
 from tdl_watcher.common import StorageError
 from tdl_watcher.config import Settings
-from tdl_watcher.extract import (InvalidArchivePassword, PasswordRequired,
+from tdl_watcher.extract import (EXTRACT_ENGINE_VERSION, InvalidArchivePassword, PasswordRequired,
                                  _run_secret_pty, _safe_member, _unrar_error,
                                  _seven_zip_error, batch_folder_name, extract_archives)
 from tdl_watcher.storage import LocalClient
@@ -30,8 +34,11 @@ class ExtractionTests(unittest.TestCase):
     def test_native_password_prompt_uses_pty_without_echoing_secret(self):
         helper = self.root / "password_helper.py"
         helper.write_text(
-            "import getpass, sys\n"
-            "value = getpass.getpass('Enter password: ')\n"
+            "import os, sys\n"
+            "fd = os.open('/dev/tty', os.O_RDWR)\n"
+            "os.write(fd, b'Enter password: ')\n"
+            "value = os.read(fd, 256).decode().rstrip('\\r\\n')\n"
+            "os.close(fd)\n"
             "print('accepted' if value == 'correct-secret' else 'rejected')\n"
             "raise SystemExit(0 if value == 'correct-secret' else 11)\n"
         )
@@ -40,6 +47,19 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("accepted", result.stdout)
         self.assertNotIn("correct-secret", result.stdout)
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("unrar"),
+                         "Native encrypted RAR test requires POSIX and unrar")
+    def test_native_unrar_rejects_wrong_password_then_extracts_fixture(self):
+        source = self.root / "native"
+        source.mkdir()
+        shutil.copyfile(Path(__file__).parent / "fixtures/native-encrypted.rar",
+                        source / "native-encrypted.rar")
+        with self.assertRaises(InvalidArchivePassword):
+            extract_archives(source, self.root / "rejected", "incorrect")
+        files = extract_archives(source, self.root / "accepted", "fixture-test")
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].read_text(), "PaPa-TDL encrypted archive test fixture\n")
 
     def test_zip_batch_extracts_into_one_folder(self):
         with zipfile.ZipFile(self.archives / "course.zip", "w") as archive:
@@ -104,6 +124,9 @@ class ExtractionTests(unittest.TestCase):
         marker = Path(first["id"]) / ".papa-tdl-batch.json"
         self.assertEqual(json.loads(marker.read_text())["batch_id"], "tg-123-10")
         self.assertEqual((Path(first["id"]) / "nested/file.txt").read_text(), "payload")
+        (Path(first["id"]) / "nested/file.txt").unlink()
+        with self.assertRaisesRegex(StorageError, "incomplete or changed"):
+            client.find_batch(folder, "tg-123-10")
 
     def test_telegram_commands_form_one_recoverable_batch(self):
         settings = Settings("TDL", self.root / "private", poll_seconds=3,
@@ -175,6 +198,56 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(saved["batch"]["media"], ["21", "22"])
         self.assertIn("45", saved["ignored_media"])
 
+    def test_staged_volume_uses_exact_saved_size_and_does_not_block_other_media(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        batch = {"peer": "-123", "start_mid": "21", "done_mid": None,
+                 "media": ["21"], "downloaded": {"21": "Course.part1.rar"},
+                 "media_meta": {"21": {"size": "1000.0 MB", "downloaded_size": 1048182784}},
+                 "auto": True, "group_key": "parts:course", "quiet_since": time.time(),
+                 "awaiting_password": False, "destination": "local",
+                 "extract_engine_version": EXTRACT_ENGINE_VERSION}
+        incoming = _batch_root(settings, batch) / "archives"
+        incoming.mkdir(parents=True)
+        volume = incoming / "Course.part1.rar"
+        with volume.open("wb") as handle:
+            handle.truncate(1048182784)
+        _save_control(settings, {"last_command_mid": "0", "batch": batch, "ignored_media": []})
+        browser = type("Browser", (), {"send_text": AsyncMock(), "download": AsyncMock()})()
+        events = [{"type": "media", "mid": "21", "label": "Course.part1.rar",
+                   "size": "1000.0 MB", "doc_id": "42"}]
+        can_continue = asyncio.run(_process_extract_commands(settings, browser, storage,
+                                                               storage.choose_folder(), "-123", events))
+        self.assertFalse(can_continue)
+        browser.download.assert_not_called()
+        self.assertTrue(volume.exists())
+
+    def test_archive_arriving_while_password_is_pending_is_deferred(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        batch = {"peer": "-123", "start_mid": "21", "done_mid": "21",
+                 "media": ["21"], "downloaded": {"21": "First.rar"},
+                 "awaiting_password": True, "destination": "local",
+                 "auto": True, "group_key": "parts:first",
+                 "extract_engine_version": EXTRACT_ENGINE_VERSION}
+        incoming = _batch_root(settings, batch) / "archives"
+        incoming.mkdir(parents=True)
+        (incoming / "First.rar").write_bytes(b"staged")
+        _save_control(settings, {"last_command_mid": "0", "batch": batch,
+                                 "ignored_media": [], "deferred_archive_mids": []})
+        browser = type("Browser", (), {"send_text": AsyncMock()})()
+        events = [{"type": "media", "mid": "21", "label": "First.rar"},
+                  {"type": "media", "mid": "22", "label": "Second.zip"}]
+        with patch.dict(os.environ, {"TDL_BACKGROUND": "1"}):
+            can_continue = asyncio.run(_process_extract_commands(settings, browser, storage,
+                                                  storage.choose_folder(), "-123", events))
+        self.assertFalse(can_continue)
+        self.assertEqual(_load_control(settings)["deferred_archive_mids"], ["22"])
+
     def test_auto_archive_batch_downloads_and_extracts_without_commands(self):
         settings = Settings("TDL", self.root / "private", destination="local",
                             output_dir=self.root / "saved")
@@ -225,13 +298,15 @@ class ExtractionTests(unittest.TestCase):
         third = {**first, "mid": "43", "label": "Course.part3.rar"}
         second = {**first, "mid": "42", "label": "Course.part2.rar"}
         with patch("tdl_watcher.service.AUTO_QUIET_SECONDS", 0):
-            for _ in range(3):
-                asyncio.run(_process_extract_commands(settings, browser, storage, folder,
-                                                      "-123", [first, third]))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                for _ in range(3):
+                    asyncio.run(_process_extract_commands(settings, browser, storage, folder,
+                                                          "-123", [first, third]))
             batch = _load_control(settings)["batch"]
             self.assertTrue(batch["awaiting_more"])
-            self.assertTrue(any("missing: 2" in call.args[0]
-                                for call in browser.send_text.await_args_list))
+            self.assertIn("missing: 2", output.getvalue())
+            self.assertFalse(browser.send_text.await_args_list)
             asyncio.run(_process_extract_commands(settings, browser, storage, folder,
                                                   "-123", [first, second, third]))
             self.assertIn("42", _load_control(settings)["batch"]["downloaded"])

@@ -14,7 +14,7 @@ from tdl_watcher import background
 from tdl_watcher import __main__ as cli
 from tdl_watcher.config import Settings
 from tdl_watcher.service import (_save_control, _load_control, _consume_extract_password,
-                                  _process_extract_commands, _batch_root)
+                                  _process_extract_commands, _batch_root, _password_channel)
 from tdl_watcher.extract import InvalidArchivePassword
 from tdl_watcher.storage import LocalClient
 from tdl_watcher.ui import ANSI_RE, panel_row
@@ -37,16 +37,14 @@ class ServiceConsoleTests(unittest.TestCase):
         with patch.object(background.sys.stdin, 'isatty', return_value=True), \
              patch.object(background, '_running', side_effect=[123, 123, None]), \
              patch.object(background.getpass, 'getpass', return_value='private-secret') as prompt, \
-             patch.object(background.time, 'sleep'), contextlib.redirect_stdout(output):
+             patch.object(background.time, 'sleep'), contextlib.redirect_stdout(output), \
+             _password_channel(self.settings):
             background.console(self.settings)
+            self.assertEqual(_consume_extract_password(self.settings), 'private-secret')
         prompt.assert_called_once()
         self.assertNotIn('private-secret', output.getvalue())
         self.assertNotIn('private-secret', (self.settings.data_dir / 'watcher.log').read_text())
-        handoff = self.settings.data_dir / 'extract-password.json'
-        if os.name != 'nt':
-            self.assertEqual(handoff.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(_consume_extract_password(self.settings), 'private-secret')
-        self.assertFalse(handoff.exists())
+        self.assertFalse((self.settings.data_dir / 'extract-password.json').exists())
 
     def test_foreground_retries_wrong_password_in_the_same_service(self):
         root = _batch_root(self.settings, self.batch)
@@ -132,17 +130,18 @@ class ServiceConsoleTests(unittest.TestCase):
             self.fail('Terminal did not display: ' + repr(target))
 
         try:
-            read_until(b'Choose [0-11]:')
-            os.write(fd, b'1\n')
-            read_until(b'Archive password (hidden):')
-            os.write(fd, b'private-secret-42\n')
-            read_until(b'Password sent securely')
-            os.write(fd, b'\x03')
-            returned = read_until(b'Choose [0-11]:')
-            self.assertNotIn(b'Press Enter to return', returned)
-            self.assertNotIn(b'private-secret-42', captured)
-            os.write(fd, b'0\n')
-            self.assertEqual(_consume_extract_password(self.settings), 'private-secret-42')
+            with _password_channel(self.settings):
+                read_until(b'Choose [0-12]:')
+                os.write(fd, b'1\n')
+                read_until(b'Archive password (hidden):')
+                os.write(fd, b'private-secret-42\n')
+                read_until(b'Password delivered')
+                os.write(fd, b'\x03')
+                returned = read_until(b'Choose [0-12]:')
+                self.assertNotIn(b'Press Enter to return', returned)
+                self.assertNotIn(b'private-secret-42', captured)
+                os.write(fd, b'0\n')
+                self.assertEqual(_consume_extract_password(self.settings), 'private-secret-42')
         finally:
             try:
                 os.kill(pid, signal.SIGTERM)

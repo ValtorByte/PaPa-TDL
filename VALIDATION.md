@@ -1,46 +1,21 @@
-# PaPa-TDL 1.6.3 validation
+# PaPa-TDL 1.6.6 validation
 
-The full suite runs 92 tests (two opt-in environment cases skipped). Regression checks cover encrypted RAR metadata with successful listing, silent unrar password failures, 7-Zip encryption flags, terminal password retry and retained-batch recovery without downloading again. Real seven-volume RAR archives with encrypted data and encrypted headers both detected missing/wrong passwords and extracted byte-for-byte with the correct password. Python compilation, installer shell syntax and whitespace checks passed. Live Telegram and VPS deployment were not performed.
+## Automated checks
 
-Earlier integration checks are recorded below.
+- `python -m unittest discover -s tests -q` passed: 103 tests, including two opt-in cases skipped. The suite exercises local transfer, duplicate detection, recovery, hosted OAuth logic with mocked endpoints, Drive metadata and checksum checks with mocked APIs, terminal/PTY input, installer paths, and archive grouping.
+- A real native encrypted RAR fixture is extracted using `unrar` with the correct password and rejected with an incorrect password. The test uses a controlling PTY, matching `unrar`'s prompt behavior. Multipart encrypted RAR and split 7z were also exercised locally with temporary synthetic archives; no personal files were used.
+- Regression cases cover rounded Telegram Web sizes, a damaged saved extraction folder, a failed pending transfer followed by an independent success, an ordinary file arriving in the same scan as an archive completion, and private Drive links versus explicit public opt-in.
+- Run `python -m compileall -q src`, `bash -n install.sh`, and `git diff --check` before release.
 
-## Passed
+## Not verified in this checkout
 
-- A real pip-less venv created with `--without-pip`; pip's `--python` option installed a local wheel into it with no network or ensurepip bootstrap.
-- Installer stubs simulate an ensurepip failure if the old venv creation path is attempted; both local and remote bootstrap installation still succeed with the new path.
-- First-run defaults: Google Drive, automatic TDL folder selection, a prepared local default folder, optional deferred account login, missing release identity guidance and a real pseudo-terminal wizard/menu flow with purple ANSI output.
-- Phone entry uses a visible prompt, accepts international and Iranian mobile formats, and keeps code/password prompts hidden. The terminal banner uses ANSI Shadow with a narrow-terminal fallback.
-- The dimensional SVG wordmark was rendered in Chromium and visually inspected.
+- No live Telegram arrival → archive extraction → Google Drive upload was completed for this revision.
+- The hosted Google OAuth broker, public production consent and domain verification are external deployments and must be checked independently before promising ordinary users a working sign-in link.
+- This revision has not been installed on hunt or another VPS. The user requested no Tailscale access, and no alternative authorized connection was used here.
+- GitHub CI, macOS, Windows and a fresh container install have not run for this revision. The installer targets Ubuntu/Debian; other systems use the documented manual path.
 
-- 82 automated tests: `python -m unittest discover -s tests -q` (two opt-in environment tests skipped).
-- Extraction batches: automatic multipart and Telegram-album grouping, optional `/extract` → files → `/done` control flow, missing-part recovery, restart-safe state, one-folder local publication, duplicate batch reuse, ZIP extraction, traversal rejection, password-required/wrong-password states, and no password in stored state or errors.
-- Real seven-volume encrypted RAR archive: missing password was detected, then all seven volumes were extracted with the correct password and the payload bytes matched. The RAR creator binary was obtained temporarily for this local test; no external service or Telegram account was involved.
-- Real encrypted split 7z archive: password detection and extraction with a complete byte-for-byte payload check passed using a temporary Ubuntu 7-Zip package.
-- Real Chromium static fixture: archive media and command DOM detection plus locating an older rendered item were verified.
-- Terminal feedback: single-line in-place progress on a TTY, log throttling when redirected, semantic cyan/green/yellow/red states, text markers alongside color, and connected-account badges.
-- Real Chromium: a controlled local Telegram-like HTML fixture, rendered-media discovery, native browser download event, complete file bytes and private pending path. No Telegram account was used by this fixture.
-- Real CLI subprocesses: local setup with a custom absolute output directory, streaming direct-file download, repeated-source skip and final file content.
-- Real Linux background processes: start/status/logs/stop without systemd or Docker, saved output settings, portable profile locking, graceful stop requests, browser cleanup and protection against signaling an unrelated PID.
-- Real loopback HTTP server: interrupted response recovery using byte ranges and validators, changed/no validator restart, safe filenames, errors without signed URL disclosure, disk and size limits.
-- Local storage: atomic hard-link save, cross-filesystem copy fallback with bounded memory, copy failure retaining the pending source, duplicate size conflicts, unsafe symlink rejection, private settings permissions and stale empty queue cleanup.
-- Native installer scripts: local checkout and `bash -c SCRIPT @ install` bootstrap with a generated repository archive, isolated package/browser-install stubs, repeat installation preserving an existing token, active-profile update refusal and invalid repository rejection. Test stubs reject any systemctl or Docker invocation.
-- Mocked Google browser OAuth: first-run/CLI default selection, PKCE, missing-JSON and callback-timeout guidance, private token file and verified Drive folder. Alternative device flow: link and code, pending/approved polling and token scope.
-- Mocked Drive: app folder creation/reuse, preallocated stable IDs, size and MD5 checks, retention of the local file on verification failure.
-- Real bundled Google Drive static discovery: upload/list/get/generateIds request parameters accepted; standard client transport excludes HTTP 308 from redirects. No Google API request was sent.
-- Python compilation, Bash syntax and `git diff --check`.
-- Source distribution and wheel built successfully with `uv build`.
-- Terminal styling: purple ANSI on a terminal, no ANSI in pipes, NO_COLOR respected.
+## Remaining limits
 
-## Not performed
+Telegram Web exposes rendered history and may miss messages during outages or bursts. Its layout can change. Protected media and account permissions are not bypassed. A background watcher has no attached password prompt; open the live console to answer it. Completed Drive files are private by default, and Google may apply confirmation or quota limits even to publicly shared direct links. Incomplete Drive uploads may restart from the beginning after process restart while the completed local source remains available for retry.
 
-- A live Telegram auto-extraction batch with real multipart RAR data. Google hosted consent, Drive API listing and private `TDL` folder creation were verified separately on hunt; a real extracted tree upload was not performed.
-- An actual apt/Chromium dependency installation on a clean VPS; native installer package installation was stubbed for its orchestration tests.
-- Docker image build/run or a GitHub Actions run. Docker remains optional.
-- Publishing or pushing changes to GitHub.
-- A macOS or Windows machine run; GitHub Actions now has jobs for both, but those jobs have not run for this local change.
-
-Before unattended use, install on the target VPS, run setup/login/check, transfer a small Telegram file, verify its bytes at the selected destination, restart the watcher and confirm duplicate skipping.
-
-Telegram Web only exposes rendered messages and does not guarantee a full history or lossless capture during outages/bursts. Login revocation and saving restrictions cannot be bypassed. Background start survives SSH disconnection but not VPS reboot; arrange startup using the host's process manager if required. Incomplete Drive uploads can restart from byte zero after a process restart; completed local pending files are retained for that retry.
-
-Release identity resolution, fixed Google endpoints, PKCE URL construction, private override precedence and failure before a false success were tested without a live Google account. Desktop OAuth configuration is kept outside source in private runtime storage. Live Google consent and upload remain unverified.
+The current CLI uses an ANSI terminal menu and JSON recovery state. A Textual interface and SQLite migration have not been delivered in this revision. Do not present this revision as satisfying those parts of the product specification or as a verified live deployment.

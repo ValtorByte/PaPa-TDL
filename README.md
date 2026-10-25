@@ -77,7 +77,7 @@ The first interactive launch opens the setup wizard. Press **Enter** to accept a
 5. Choose **Check destination**, then **Start background watcher**.
 6. Open **View logs** to confirm `Saved` and check the actual destination.
 
-The menu shows the configured destination, the local default folder, and whether login files are saved. Saved login data is not a live account health check. Existing valid sessions are reused; setup does not ask for a new login on every launch.
+The menu shows the configured destination and recent verified account checks. A saved session with no recent check is labeled **unverified** rather than connected. Existing valid sessions are reused; setup does not ask for a new login on every launch.
 
 ## Connect Google Drive
 
@@ -160,7 +160,9 @@ Files are saved privately. The tool does not publish a web server or make local 
 
 Send ZIP, RAR or 7z archives to the configured private Telegram group. The watcher recognizes related volume names such as `.part1.rar`, `.part2.rar`, `.7z.001` and `.zip.001`. It also groups archives sent as one Telegram album. After no new part has arrived for 30 seconds, it downloads all parts, extracts them together and saves one folder inside `TDL`. Ordinary archives are extracted automatically too.
 
-For a custom batch, you can still send `/extract`, then the files, then `/done`. If a part is missing or extraction fails, the files stay in the private recovery area; send the missing file and `/done` to retry. Open **Live service** from menu option 1, or run `papa-tdl console`. Encrypted archives prompt for their password directly in this view; incorrect passwords can be retried there. Foreground watching (option 3) also prompts in the same terminal. Errors appear alongside live transfers. Ctrl+C returns directly to the menu without an extra Enter; the background service continues running. The optional `papa-tdl extract-password` command remains available for separate terminal use. It is handed to the watcher through a one-time private file and removed immediately after use. Failed part downloads and storage uploads are retried while unrelated files continue to be watched. A restart resumes the batch and skips already verified Drive files.
+For a custom batch, you can still send `/extract`, then the files, then `/done`. If a part is missing or extraction fails, the files stay in the private recovery area. Open **Live service** from menu option 1, or run `papa-tdl console`. Encrypted archives request their password directly in this view; an incorrect password can be retried there. Foreground watching (option 3) also prompts in the same terminal. Passwords and extraction errors stay in the terminal, not in the Telegram group. Ctrl+C returns directly to the menu; the background service continues running. The optional `papa-tdl extract-password` command sends a one-time password over a private local socket without saving it to disk. Failed archive batches retain their parts, while ordinary files and other archive batches can continue. A restart reuses staged parts and skips verified destination files.
+
+Telegram Web shows rounded file sizes. PaPa-TDL records the exact byte count of each completed browser download for restart checks. If an archive itself is missing or damaged, PaPa-TDL cannot reconstruct it; supply a complete copy of the affected volume.
 
 Archive extraction rejects traversal paths and symbolic links. The Ubuntu/Debian installer includes 7-Zip and installs RAR support when the distribution offers it. Manual installations need `unrar` or a RAR-capable 7-Zip package for RAR, and `7zz`, `7z` or `7za` for 7z and split archives.
 
@@ -194,6 +196,8 @@ Telegram Web only renders part of a chat. This is a watcher for rendered recent/
 
 Google files remain private. Printed view URLs require access and are not anonymous direct-download links. Never share your Telegram profile, Google OAuth JSON, tokens or private data directory.
 
+To inspect a saved Drive file, run `papa-tdl share FILE_ID`; this prints its view URL and sharing status without changing permissions. To opt in to public read access, run `papa-tdl share FILE_ID --public` and type `PUBLIC` at the warning. For unattended use, `--public --yes` is an explicit opt-in. A public file receives a `drive.google.com/uc?export=download&id=...` URL, but Google may still show a confirmation page or apply download quotas. A private file has no anonymous direct-download URL.
+
 ## Update / troubleshooting
 
 From the latest checkout or extracted release on the VPS:
@@ -205,7 +209,7 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.5`. A cached older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.6`. An older `main` script will still run the older installer.
 
 If the Playwright browser CDN returns a regional 403, the installer automatically uses an existing system browser or tries the official Chrome system package. The selected executable is saved in the launcher, so normal runs do not download a browser again.
 
@@ -216,7 +220,7 @@ If the Playwright browser CDN returns a regional 403, the installer automaticall
 | `papa-tdl: command not found` after a failed install | Finish installation successfully first. For a non-root install, also add `~/.local/bin` to PATH. |
 | `System has not been booted with systemd` | The native installer does not call systemctl. Use `papa-tdl start/stop/status` instead. |
 | Drive is not connected | Run `papa-tdl drive-login`, approve the browser link and wait for `Google Drive connected`; or select local in setup. |
-| `TV OAuth client ID` appears | You are running an older version or explicitly selected --method device; update to 1.6.5 and use papa-tdl drive-login. |
+| `TV OAuth client ID` appears | You are running an older version or explicitly selected `--method device`; update and use `papa-tdl drive-login`. |
 | No Google login URL appears | Check connectivity to the PaPa-TDL authentication service and retry. Users do not need an OAuth JSON for hosted sign-in. |
 | OAuth JSON cannot be read | Move it out of `/root` to the private data directory and assign it to the runtime user. |
 | Google approved, but the VPS times out | Keep drive-login running and use a fresh link if it expires. SSH forwarding is needed only for the optional --method browser flow. |
@@ -230,6 +234,8 @@ The installer retains the private data directory during updates. Program release
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [VALIDATION.md](VALIDATION.md). Environment overrides are documented in [.env.example](.env.example). Optional Docker deployment is available in `compose.yaml`; it requires a working Docker daemon.
 
 MIT licensed. Terminal wordmark uses the [ANSI Shadow FIGlet font from TAAG](https://patorjk.com/software/taag/#p=display&f=ANSI%20Shadow&t=PaPa-TDL). [Google device OAuth reference](https://developers.google.com/identity/protocols/oauth2/limited-input-device) · [Desktop OAuth reference](https://developers.google.com/identity/protocols/oauth2/native-app) · [pip's Python environment option](https://pip.pypa.io/en/stable/topics/python-option/)
+
+See [CHANGELOG.md](CHANGELOG.md) for release and migration notes and [VALIDATION.md](VALIDATION.md) for checks that have and have not been performed.
 
 
 ## Product website

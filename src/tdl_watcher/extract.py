@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import errno
 import os
-import pty
 import re
 import select
 import shutil
@@ -19,7 +18,7 @@ from .common import StorageError
 from .telegram import safe_filename
 from .ui import ProgressBar
 
-EXTRACT_ENGINE_VERSION = 3
+EXTRACT_ENGINE_VERSION = 4
 
 
 class PasswordRequired(StorageError):
@@ -173,20 +172,48 @@ def _run_unrar(arguments: list[str], password: str | None) -> subprocess.Complet
 
 def _run_secret_pty(command: list[str], password: str, *, env: dict[str, str],
                     timeout: float) -> subprocess.CompletedProcess:
-    """Answer one native password prompt through a PTY without exposing the secret."""
+    """Give the extractor a controlling terminal and answer its password prompt."""
+    import pty
+    import termios
+    import sys
+
     master, slave = pty.openpty()
-    process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
-                               env=env, close_fds=True)
+    attributes = termios.tcgetattr(slave)
+    attributes[3] &= ~termios.ECHO
+    termios.tcsetattr(slave, termios.TCSANOW, attributes)
+    # unrar may open /dev/tty instead of reading stdin. A PTY alone is not a
+    # controlling terminal. The helper creates a new session and attaches its
+    # stdin before replacing itself with the extractor. The password is never
+    # passed in arguments or the environment.
+    helper = (
+        "import fcntl,os,sys,termios;"
+        "os.setsid();"
+        "fcntl.ioctl(0,termios.TIOCSCTTY,0);"
+        "os.execvpe(sys.argv[1],sys.argv[1:],os.environ)"
+    )
+    try:
+        process = subprocess.Popen([sys.executable, "-c", helper, *command],
+                                   stdin=slave, stdout=slave, stderr=slave,
+                                   env=env, close_fds=True)
+    except BaseException:
+        os.close(master)
+        os.close(slave)
+        raise
     os.close(slave)
     output = bytearray()
     prompt_buffer = bytearray()
-    sent = False
+    sent = 0
+    last_answer_at = 0
+    rejected = False
     deadline = time.monotonic() + timeout
     # Native unrar includes the full archive path in this prompt, which may be
     # much longer than a normal terminal line.
-    # unrar can emit this prompt in many tiny writes; answer as soon as its
-    # unambiguous prefix is available instead of waiting for the final colon.
-    prompt = re.compile(rb"(?i)(enter\s+password|password\s+(?:required|needed))")
+    # Wait for the *end* of the prompt. unrar flushes pending terminal input
+    # before reading it, so responding to an early partial write loses the
+    # password and leaves the extractor waiting indefinitely.
+    prompt = re.compile(
+        rb"(?i)(?:enter\s+password|password\s+(?:required|needed))[^\r\n]*:\s*$"
+    )
     try:
         while True:
             if time.monotonic() >= deadline:
@@ -207,12 +234,22 @@ def _run_secret_pty(command: list[str], password: str, *, env: dict[str, str],
                     if len(prompt_buffer) > 4096:
                         del prompt_buffer[:-4096]
                     if prompt.search(bytes(prompt_buffer)):
-                        if sent:
-                            process.terminate()
+                        recent = bytes(output[last_answer_at:]).lower()
+                        if sent and any(word in recent for word in
+                                        (b"incorrect", b"wrong password", b"bad password")):
+                            rejected = True
+                            process.kill()
+                        elif sent >= 64:
+                            process.kill()
                         else:
+                            # unrar can flush terminal input immediately after
+                            # rendering the prompt. Give it time to enter its
+                            # read call so our answer cannot be discarded.
+                            time.sleep(0.2)
                             os.write(master, password.encode("utf-8") + b"\n")
-                            sent = True
-                            prompt_buffer.clear()
+                            sent += 1
+                            last_answer_at = len(output)
+                        prompt_buffer.clear()
             if process.poll() is not None:
                 while True:
                     try:
@@ -225,8 +262,12 @@ def _run_secret_pty(command: list[str], password: str, *, env: dict[str, str],
                         break
                     output.extend(chunk)
                 break
-        return subprocess.CompletedProcess(command, process.returncode,
-                                           output.decode("utf-8", errors="replace"))
+        result = output.decode("utf-8", errors="replace")
+        # Do not trust a third-party extractor to suppress terminal echo.
+        result = result.replace(password, "[redacted]")
+        if rejected:
+            result += "\nWrong password."
+        return subprocess.CompletedProcess(command, process.returncode, result)
     finally:
         if process.poll() is None:
             process.kill()
@@ -238,14 +279,14 @@ def _unrar_error(result: subprocess.CompletedProcess, password: str | None) -> N
     if result.returncode == 0:
         return
     output = result.stdout.lower()
+    if "unexpected end" in output or "missing volume" in output or "cannot find volume" in output:
+        raise StorageError("An archive volume is incomplete, missing, or truncated; it must be downloaded again.")
     if result.returncode == 11:
         if password:
             raise InvalidArchivePassword("The archive password was rejected.")
         raise PasswordRequired("This extraction batch requires a password.")
     if password and ("wrong password" in output or "password is incorrect" in output):
         raise InvalidArchivePassword("The archive password was rejected.")
-    if "unexpected end" in output or "missing volume" in output or "cannot find volume" in output:
-        raise StorageError("An archive volume is incomplete, missing, or truncated; it must be downloaded again.")
     if not password and ("password" in output or "encrypted" in output):
         raise PasswordRequired("This extraction batch requires a password.")
     reasons = {3: "Archive checksum failed; a part is damaged or truncated.",

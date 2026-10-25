@@ -1,0 +1,17 @@
+# Changelog
+
+## 1.6.6 — prepared, not deployed
+
+- Use a controlling terminal for native `unrar` password prompts. Hidden passwords are not passed in process arguments or stored by the new handoff path.
+- Keep other files moving while an archive waits for a password, a part, or a retry. A completed archive no longer skips ordinary media found in the same scan.
+- Treat Telegram Web's displayed file size as an estimate. Persist the exact number of downloaded bytes for recovery.
+- Recheck local extracted files and Google Drive batch children before declaring a saved batch complete.
+- Persist and verify the selected default Google Drive `TDL` folder ID.
+- Add an explicit `papa-tdl share` command. Files remain private unless `--public` is confirmed; the printed direct-download URL is subject to Google's access, confirmation, and quota rules.
+- Show recently verified account states in the terminal menu and remove a bundled personal Desktop OAuth identity from the current source.
+
+### Upgrade notes
+
+Existing browser sessions, Google tokens, settings, pending files and archive batches stay in the private data directory. Do not delete that directory during upgrade. Earlier plaintext `extract-password.json` handoffs are read once for migration; new passwords use a private local socket. Native password entry requires POSIX and an installed `unrar`; the documented manual install path applies on platforms outside the Ubuntu/Debian installer target.
+
+Historical Git commits may still contain previously committed OAuth client details. Removing them from current source does not erase shared history; rotate credentials when appropriate. Do not bypass GitHub secret scanning or force-push an automatic history rewrite.
