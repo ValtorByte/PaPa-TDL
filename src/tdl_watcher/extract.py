@@ -18,7 +18,7 @@ from .common import StorageError
 from .telegram import safe_filename
 from .ui import ProgressBar
 
-EXTRACT_ENGINE_VERSION = 5
+EXTRACT_ENGINE_VERSION = 6
 
 
 class PasswordRequired(StorageError):
@@ -148,7 +148,7 @@ def _run_7z(arguments: list[str], password: str | None) -> subprocess.CompletedP
     # appears in argv, process listings, state files, or captured output.
     return subprocess.run(command, input=(password or "") + "\n", text=True,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=24 * 60 * 60,
-                          env={**os.environ, "LANG": "C", "LC_ALL": "C"})
+                          env={**os.environ, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"})
 
 
 def _seven_zip_error(result: subprocess.CompletedProcess, password: str | None) -> None:
@@ -168,7 +168,9 @@ def _seven_zip_error(result: subprocess.CompletedProcess, password: str | None) 
 
 def _run_unrar(arguments: list[str], password: str | None) -> subprocess.CompletedProcess:
     command = ["unrar", *arguments[:1], *([] if password else ["-p-"]), *arguments[1:]]
-    env = {**os.environ, "LANG": "C", "LC_ALL": "C"}
+    # RAR archives may contain non-ASCII names. The C locale replaces those
+    # characters with '?' and can make distinct files collide on extraction.
+    env = {**os.environ, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
     if not password:
         return subprocess.run(command, text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, timeout=24 * 60 * 60, env=env)
@@ -350,6 +352,13 @@ def extract_archives(source: Path, destination: Path, password: str | None = Non
     if limit <= 0:
         raise StorageError("Not enough free disk space to extract this batch.")
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Numbered "Part01 (01-22).rar" files are independent archives, unlike
+    # RAR's ".part01.rar" volumes. Each may contain the same cover/photo
+    # filename, so retain a separate PartNN directory within the batch.
+    numbered_parts = (len(archives) > 1 and all(
+        SERIES_RE.fullmatch(path.name) and not PART_RE.search(path.name)
+        for path in archives
+    ))
     progress = ProgressBar("Extracting batch", len(archives))
     try:
         for index, archive in enumerate(archives, 1):
@@ -363,7 +372,13 @@ def extract_archives(source: Path, destination: Path, password: str | None = Non
                 else:
                     _extract_7z(archive, output, password, limit)
                 _validate_tree(output)
-                _merge_tree(output, destination)
+                target = destination
+                if numbered_parts:
+                    number = int(SERIES_RE.fullmatch(archive.name).group("number"))
+                    target = destination / f"Part{number:02d}"
+                    if target.exists():
+                        raise StorageError(f"Two archives use the same part number: {number}.")
+                _merge_tree(output, target)
             progress.update(index, detail=archive.name)
         result = _validate_tree(destination)
         progress.finish(f"{len(result)} files ready")

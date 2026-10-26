@@ -15,7 +15,7 @@ import zipfile
 from tdl_watcher.common import StorageError
 from tdl_watcher.config import Settings
 from tdl_watcher.extract import (EXTRACT_ENGINE_VERSION, InvalidArchivePassword, PasswordRequired,
-                                 _run_secret_pty, _safe_member, _unrar_error,
+                                 _run_7z, _run_secret_pty, _run_unrar, _safe_member, _unrar_error,
                                  _seven_zip_error, batch_folder_name, extract_archives)
 from tdl_watcher.storage import LocalClient
 from tdl_watcher.service import (_archive_group, _load_control, _process_extract_commands,
@@ -63,6 +63,15 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("accepted", result.stdout)
         self.assertNotIn("correct-secret", result.stdout)
+
+    def test_extractors_preserve_unicode_archive_names(self):
+        with patch("tdl_watcher.extract.subprocess.run") as run:
+            _run_unrar(["lt", "archive.rar"], None)
+            self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C.UTF-8")
+        with patch("tdl_watcher.extract._seven_zip", return_value="7z"), \
+             patch("tdl_watcher.extract.subprocess.run") as run:
+            _run_7z(["l", "archive.7z"], None)
+            self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C.UTF-8")
 
     @unittest.skipUnless(os.name == "posix" and shutil.which("unrar"),
                          "Native encrypted RAR test requires POSIX and unrar")
@@ -220,9 +229,20 @@ class ExtractionTests(unittest.TestCase):
             for _ in range(3):
                 asyncio.run(_process_extract_commands(settings, browser, storage,
                                                       storage.choose_folder(), "-123", events))
-        self.assertEqual(sorted(path.name for path in (settings.local_root / "Course").glob("*.txt")),
-                         ["lesson-51.txt", "lesson-52.txt"])
+        self.assertEqual(sorted(path.relative_to(settings.local_root / "Course").as_posix()
+                                for path in (settings.local_root / "Course").rglob("*.txt")),
+                         ["Part01/lesson-51.txt", "Part02/lesson-52.txt"])
         self.assertIsNone(_load_control(settings)["batch"])
+
+    def test_numbered_archives_keep_colliding_filenames_in_each_part(self):
+        for number in (1, 2):
+            with zipfile.ZipFile(self.archives / f"Course_Part{number:02d} (01-22).zip", "w") as archive:
+                archive.writestr("photo.jpg", f"cover {number}")
+        output = self.root / "output"
+        files = extract_archives(self.archives, output)
+        self.assertEqual(len(files), 2)
+        self.assertEqual((output / "Part01/photo.jpg").read_text(), "cover 1")
+        self.assertEqual((output / "Part02/photo.jpg").read_text(), "cover 2")
 
     def test_saved_numbered_archive_batch_joins_new_parts_after_upgrade(self):
         settings = Settings("TDL", self.root / "private", destination="local",

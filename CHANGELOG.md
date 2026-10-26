@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.9 — Unicode RAR names and numbered archive collisions
+
+- Run archive extractors in a UTF-8 locale so Persian filenames keep their original names and do not collide as question marks.
+- Extract independent `Part01`, `Part02`, and similar numbered archives into separate subfolders within one batch folder. Repeated names such as `photo.jpg` are preserved.
+- Retry a retained failed batch after upgrading the extraction engine, without downloading the archive parts again.
+
 ## 1.6.8 — archive backfill and numbered sets
 
 - Search older Telegram history when a later RAR volume is found first, so missing earlier volumes can join the same batch.

@@ -1,3 +1,3 @@
 """PaPa-TDL: Telegram media to local storage or Google Drive."""
 
-__version__ = "1.6.8"
+__version__ = "1.6.9"
