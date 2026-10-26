@@ -160,7 +160,7 @@ Files are saved privately. The tool does not publish a web server or make local 
 
 ### Extract archives from Telegram
 
-Send ZIP, RAR or 7z archives to the configured private Telegram group. The watcher recognizes related volume names such as `.part1.rar`, `.part2.rar`, `.7z.001` and `.zip.001`. It also groups archives sent as one Telegram album. After no new part has arrived for 30 seconds, it downloads all parts, extracts them together and saves one folder inside `TDL`. Ordinary archives are extracted automatically too.
+Send ZIP, RAR or 7z archives to the configured private Telegram group. The watcher recognizes related volume names such as `.part1.rar`, `.part2.rar`, `.7z.001` and `.zip.001`, as well as numbered independent archives such as `Course_Part01 (01-22).rar` and `Course_Part02 (23-43).rar`. It also groups archives sent as one Telegram album. After no new part has arrived for 30 seconds, it downloads all parts, extracts them together and saves one folder inside `TDL`. Ordinary archives are extracted automatically too.
 
 For a custom batch, you can still send `/extract`, then the files, then `/done`. If a part is missing or extraction fails, the files stay in the private recovery area. Open **Live service** from menu option 1, or run `papa-tdl console`. Encrypted archives request their password directly in this view; an incorrect password can be retried there. Foreground watching (option 3) also prompts in the same terminal. Passwords and extraction errors stay in the terminal, not in the Telegram group. Ctrl+C returns directly to the menu; the background service continues running. The optional `papa-tdl extract-password` command sends a one-time password over a private local socket without saving it to disk. Failed archive batches retain their parts, while ordinary files and other archive batches can continue. A restart reuses staged parts and skips verified destination files.
 
@@ -211,7 +211,7 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.7`. An older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.8`. An older `main` script will still run the older installer.
 
 If the Playwright browser CDN returns a regional 403, the installer automatically uses an existing system browser or tries the official Chrome system package. The selected executable is saved in the launcher, so normal runs do not download a browser again.
 

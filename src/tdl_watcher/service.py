@@ -19,7 +19,7 @@ from .config import Settings
 from .config import private_json
 from .health import record, verified_recently
 from .common import StorageError
-from .extract import (InvalidArchivePassword, PasswordRequired, PART_RE, ARCHIVE_RE,
+from .extract import (InvalidArchivePassword, PasswordRequired, PART_RE, SERIES_RE, ARCHIVE_RE,
                       EXTRACT_ENGINE_VERSION, batch_folder_name, extract_archives)
 from .storage import make_storage
 from .telegram import TelegramBrowser, TelegramError, safe_filename
@@ -39,6 +39,9 @@ def _archive_group(event):
     match = PART_RE.search(label)
     if match:
         return "parts:" + label[:match.start()].casefold()
+    series = SERIES_RE.fullmatch(label)
+    if series:
+        return "series:" + series.group("base").casefold()
     if event.get("album") and ARCHIVE_RE.search(label):
         return "album:" + str(event["album"])
     archive = ARCHIVE_RE.search(label)
@@ -72,9 +75,31 @@ def _missing_parts(files):
             numbers.add(int(match.group(1)))
         elif match and match.group(5):
             numbers.add(int(match.group(5)))
+        else:
+            series = SERIES_RE.fullmatch(path.name)
+            if series:
+                numbers.add(int(series.group("number")))
     if not numbers:
         return []
     return [number for number in range(1, max(numbers) + 1) if number not in numbers]
+
+
+def _scan_floor(control, scan_since):
+    """Keep older archive volumes visible when a later part started a batch."""
+    batch = control.get("batch")
+    deferred = control.get("deferred_archive_mids", [])
+    if not batch:
+        return min([scan_since, *deferred], key=int)
+    known = [batch["start_mid"], *batch.get("media", [])]
+    metadata = batch.get("media_meta", {})
+    labels = [Path(str(metadata.get(mid, {}).get("label")
+                       or batch.get("downloaded", {}).get(mid, "")))
+              for mid in batch.get("media", [])]
+    # A batch first discovered from part7 must search earlier history for
+    # part1..part6. Stopping at part7 can never recover those messages.
+    if batch.get("auto") and _missing_parts(labels):
+        return "0"
+    return min([*known, *deferred], key=int)
 
 
 def _control_path(settings):
@@ -233,6 +258,19 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         raise StorageError("An extraction batch belongs to another Telegram group; finish it before changing groups.")
     if batch.get("destination") != settings.destination:
         raise StorageError("The extraction destination changed mid-batch; restore it or finish the saved batch first.")
+    if batch.get("auto") and not str(batch.get("group_key", "")).startswith("series:"):
+        # Releases before 1.6.8 treated "Title_Part01 (01-22).rar" as a
+        # standalone archive. Upgrade a retained batch so later parts join it.
+        for mid in batch.get("media", []):
+            label = (batch.get("media_meta", {}).get(mid, {}).get("label")
+                     or batch.get("downloaded", {}).get(mid, ""))
+            group = _archive_group({"label": label})
+            if group and group.startswith("series:"):
+                batch["group_key"] = group
+                batch.pop("last_attempt_signature", None)
+                batch["awaiting_more"] = False
+                _save_control(settings, control)
+                break
     if batch.get("extract_engine_version") != EXTRACT_ENGINE_VERSION:
         # An earlier decoder failure must not leave an upgraded watcher stuck
         # behind its saved attempt signature. Reuse downloaded parts once.
@@ -624,10 +662,7 @@ async def _watch_impl(settings: Settings, *, selected_ids=None, once=False) -> N
                 continue
             try:
                 control = _load_control(settings)
-                if control.get("batch"):
-                    floor = control["batch"]["start_mid"]
-                else:
-                    floor = min([scan_since, *control.get("deferred_archive_mids", [])], key=int)
+                floor = _scan_floor(control, scan_since)
                 events = await browser.visible_events(peer, since_mid=floor)
                 if events:
                     scan_since = max((item["mid"] for item in events), key=int)

@@ -19,7 +19,8 @@ from tdl_watcher.extract import (EXTRACT_ENGINE_VERSION, InvalidArchivePassword,
                                  _seven_zip_error, batch_folder_name, extract_archives)
 from tdl_watcher.storage import LocalClient
 from tdl_watcher.service import (_archive_group, _load_control, _process_extract_commands,
-                                 _same_staged_media, _save_control, _batch_root)
+                                 _same_staged_media, _save_control, _batch_root, _scan_floor,
+                                 _missing_parts)
 
 
 class ExtractionTests(unittest.TestCase):
@@ -29,6 +30,21 @@ class ExtractionTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.archives = self.root / "archives"
         self.archives.mkdir()
+
+    def test_late_archive_volume_searches_older_telegram_history(self):
+        batch = {"auto": True, "start_mid": "1158", "media": ["1158"],
+                 "media_meta": {"1158": {"label": "SOC TIER 1 @PyPackage.part7.rar"}}}
+        control = {"batch": batch, "deferred_archive_mids": []}
+        self.assertEqual(_scan_floor(control, "1158"), "0")
+        batch["downloaded"] = {"1158": batch["media_meta"]["1158"]["label"]}
+        batch.pop("media_meta")
+        self.assertEqual(_scan_floor(control, "1158"), "0")
+        batch["media_meta"] = {}
+        for number in range(1, 7):
+            mid = str(1127 + number)
+            batch["media"].append(mid)
+            batch["media_meta"][mid] = {"label": f"SOC TIER 1 @PyPackage.part{number}.rar"}
+        self.assertEqual(_scan_floor(control, "1158"), "1128")
 
     @unittest.skipUnless(os.name == "posix", "PTY password handoff requires POSIX")
     def test_native_password_prompt_uses_pty_without_echoing_secret(self):
@@ -164,6 +180,85 @@ class ExtractionTests(unittest.TestCase):
         second = {**first, "mid": "22", "label": "Course.part2.rar"}
         self.assertEqual(_archive_group(first), _archive_group(second))
         self.assertEqual(_archive_group({**first, "label": "Course.rar"}), _archive_group(first))
+
+    def test_numbered_archives_with_ranges_form_one_batch(self):
+        first = {"type": "media", "mid": "1368",
+                 "label": "SANS SEC 401 @PyPackage_Part01 (01-22).rar"}
+        third = {**first, "mid": "1371",
+                 "label": "SANS SEC 401 @PyPackage_Part03 (44-64).rar"}
+        second = {**first, "mid": "1369",
+                  "label": "SANS SEC 401 @PyPackage_Part02 (23-43).rar"}
+        self.assertEqual(_archive_group(first), _archive_group(second))
+        self.assertEqual(_archive_group(first), _archive_group(third))
+        self.assertEqual(_missing_parts([Path(third["label"])]), [1, 2])
+        self.assertEqual(_missing_parts([Path(item["label"]) for item in (first, second, third)]), [])
+        self.assertEqual(batch_folder_name([Path(item["label"]) for item in (third, second, first)],
+                                           "fallback"), "SANS SEC 401 @PyPackage")
+
+    def test_numbered_zip_archives_extract_into_one_folder(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        browser = type("Browser", (), {})()
+        browser.send_text = AsyncMock()
+
+        async def download(spec, destination):
+            path = destination / spec["label"]
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(f"lesson-{spec['mid']}.txt", "ready")
+            return path
+
+        browser.download = AsyncMock(side_effect=download)
+        events = [
+            {"type": "media", "peer": "-123", "mid": "51", "kind": "bubble",
+             "label": "Course_Part01 (01-22).zip"},
+            {"type": "media", "peer": "-123", "mid": "52", "kind": "bubble",
+             "label": "Course_Part02 (23-43).zip"},
+        ]
+        with patch("tdl_watcher.service.AUTO_QUIET_SECONDS", 0):
+            for _ in range(3):
+                asyncio.run(_process_extract_commands(settings, browser, storage,
+                                                      storage.choose_folder(), "-123", events))
+        self.assertEqual(sorted(path.name for path in (settings.local_root / "Course").glob("*.txt")),
+                         ["lesson-51.txt", "lesson-52.txt"])
+        self.assertIsNone(_load_control(settings)["batch"])
+
+    def test_saved_numbered_archive_batch_joins_new_parts_after_upgrade(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        first_name = "Course_Part01 (01-22).rar"
+        second_name = "Course_Part02 (23-43).rar"
+        batch = {"peer": "-123", "start_mid": "51", "done_mid": None,
+                 "media": ["51"], "downloaded": {"51": first_name},
+                 "media_meta": {"51": {"label": first_name, "downloaded_size": 4}},
+                 "awaiting_password": False, "destination": "local", "auto": True,
+                 "group_key": "parts:course_part01 (01-22)"}
+        incoming = _batch_root(settings, batch) / "archives"
+        incoming.mkdir(parents=True)
+        (incoming / first_name).write_bytes(b"part")
+        _save_control(settings, {"last_command_mid": "0", "batch": batch,
+                                 "ignored_media": [], "deferred_archive_mids": []})
+        browser = type("Browser", (), {})()
+        browser.send_text = AsyncMock()
+
+        async def download(spec, destination):
+            path = destination / spec["label"]
+            path.write_bytes(b"part")
+            return path
+
+        browser.download = AsyncMock(side_effect=download)
+        events = [{"type": "media", "peer": "-123", "mid": "51", "kind": "bubble",
+                   "label": first_name},
+                  {"type": "media", "peer": "-123", "mid": "52", "kind": "bubble",
+                   "label": second_name}]
+        asyncio.run(_process_extract_commands(settings, browser, storage,
+                                              storage.choose_folder(), "-123", events))
+        saved = _load_control(settings)["batch"]
+        self.assertEqual(saved["group_key"], "series:course")
+        self.assertEqual(saved["downloaded"]["52"], second_name)
 
     def test_reforwarded_archive_part_is_deduplicated(self):
         batch = {"downloaded": {"21": "Course.part1.rar"},

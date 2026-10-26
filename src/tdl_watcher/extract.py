@@ -18,7 +18,7 @@ from .common import StorageError
 from .telegram import safe_filename
 from .ui import ProgressBar
 
-EXTRACT_ENGINE_VERSION = 4
+EXTRACT_ENGINE_VERSION = 5
 
 
 class PasswordRequired(StorageError):
@@ -30,6 +30,10 @@ class InvalidArchivePassword(StorageError):
 
 
 PART_RE = re.compile(r"(?i)(?:\.part0*([0-9]+)\.rar|\.([rz])([0-9]{2})|\.(zip|7z)\.0*([0-9]+))$")
+SERIES_RE = re.compile(
+    r"(?i)^(?P<base>.+?)[._ -]+part0*(?P<number>[1-9][0-9]*)"
+    r"(?:\s*\([^)]*\))?\.(?:rar|zip|7z)$"
+)
 ARCHIVE_RE = re.compile(r"(?i)(?:\.zip|\.rar|\.7z|\.tar|\.tar\.(?:gz|bz2|xz)|\.tgz|\.tbz2|\.txz)$")
 
 
@@ -55,6 +59,9 @@ def _is_first_volume(path: Path) -> bool:
 
 
 def _archive_stem(name: str) -> str:
+    series = SERIES_RE.fullmatch(name)
+    if series:
+        return safe_filename(series.group("base"), "extracted")
     value = re.sub(r"(?i)\.part0*1\.rar$|\.(?:zip|7z)\.0*1$", "", name)
     value = re.sub(r"(?i)\.(?:zip|rar|7z|tar|tgz|tbz2|txz)(?:\.(?:gz|bz2|xz))?$", "", value)
     return safe_filename(value, "extracted")

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.8 — archive backfill and numbered sets
+
+- Search older Telegram history when a later RAR volume is found first, so missing earlier volumes can join the same batch.
+- Group archives named like `Course_Part01 (01-22).rar` and `Course_Part02 (23-43).rar` into one extraction folder, including batches retained from older releases.
+- Keep the downloaded source parts until extraction and destination verification complete.
+
 ## 1.6.7 — terminal resize fix
 
 - Redraw the interactive menu when the terminal width changes while it is open. A compact menu replaces wide bordered cards below 100 columns, and the banner shrinks below 55 columns.
