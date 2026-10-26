@@ -211,7 +211,9 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.9`. An older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.10`. An older `main` script will still run the older installer.
+
+Large Telegram Web downloads can finish short while the browser reports success. Version 1.6.10 detects the mismatch and retries instead of extracting or uploading a damaged archive. If a file remains short after repeated attempts, Telegram Web is not a reliable transfer path for that file; a Telethon implementation requires your own Telegram API ID/hash and a separate authenticated session. A temporary Colab runtime can disconnect before multi-gigabyte transfers finish.
 
 If the Playwright browser CDN returns a regional 403, the installer automatically uses an existing system browser or tries the official Chrome system package. The selected executable is saved in the launcher, so normal runs do not download a browser again.
 

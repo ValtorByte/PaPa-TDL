@@ -61,6 +61,24 @@ def estimated_bytes(label: str) -> int:
     return math.ceil(max(sizes)) if sizes else 0
 
 
+def matches_displayed_size(label: str, actual_bytes: int) -> bool:
+    """Reject short browser downloads using the precision shown by Telegram Web.
+
+    Telegram Web displays binary units rounded to the last visible digit.
+    A completed Playwright download can still be shorter than the document.
+    When no usable size is displayed, leave integrity checking to the caller.
+    """
+    scale = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+    matches = re.findall(r"([0-9]+(?:[.,][0-9]+)?)\s*(TB|GB|MB|KB|B)\b", label, re.I)
+    if not matches:
+        return True
+    number, unit = max(matches, key=lambda item: float(item[0].replace(",", ".")) * scale[item[1].upper()])
+    precision = len(number.split(".", 1)[1]) if "." in number else 0
+    expected = float(number.replace(",", ".")) * scale[unit.upper()]
+    tolerance = 0.5 * 10 ** -precision * scale[unit.upper()] + 4096
+    return abs(actual_bytes - expected) <= tolerance
+
+
 class TelegramBrowser:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -452,9 +470,11 @@ class TelegramBrowser:
             browser_path = Path(browser_path)
             if not browser_path.is_file() or browser_path.stat().st_size <= 0:
                 raise TelegramError("Telegram Web produced an empty or missing file.")
-            # The UI size is rounded and sometimes uses a different unit.
-            # Playwright's completed download event and failure() are the
-            # authoritative signals; retain the exact observed byte count.
+            if not matches_displayed_size(" ".join(labels), browser_path.stat().st_size):
+                raise TelegramError(
+                    "Telegram Web ended the download before the displayed file size was reached. "
+                    "The incomplete browser file was discarded; retrying is safe."
+                )
             if self.settings.max_download_bytes and browser_path.stat().st_size > self.settings.max_download_bytes:
                 raise TelegramError("Telegram media exceeds TDL_MAX_DOWNLOAD_BYTES.")
             filename = safe_filename(downloaded.suggested_filename, f"telegram_{mid}.bin")

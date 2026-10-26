@@ -320,7 +320,7 @@ class ExtractionTests(unittest.TestCase):
         storage = LocalClient(settings)
         batch = {"peer": "-123", "start_mid": "21", "done_mid": None,
                  "media": ["21"], "downloaded": {"21": "Course.part1.rar"},
-                 "media_meta": {"21": {"size": "1000.0 MB", "downloaded_size": 1048182784}},
+                 "media_meta": {"21": {"size": "1000.0 MB", "downloaded_size": 1048576000}},
                  "auto": True, "group_key": "parts:course", "quiet_since": time.time(),
                  "awaiting_password": False, "destination": "local",
                  "extract_engine_version": EXTRACT_ENGINE_VERSION}
@@ -328,7 +328,7 @@ class ExtractionTests(unittest.TestCase):
         incoming.mkdir(parents=True)
         volume = incoming / "Course.part1.rar"
         with volume.open("wb") as handle:
-            handle.truncate(1048182784)
+            handle.truncate(1048576000)
         _save_control(settings, {"last_command_mid": "0", "batch": batch, "ignored_media": []})
         browser = type("Browser", (), {"send_text": AsyncMock(), "download": AsyncMock()})()
         events = [{"type": "media", "mid": "21", "label": "Course.part1.rar",
@@ -338,6 +338,35 @@ class ExtractionTests(unittest.TestCase):
         self.assertFalse(can_continue)
         browser.download.assert_not_called()
         self.assertTrue(volume.exists())
+
+    def test_short_staged_volume_is_discarded_and_retried(self):
+        settings = Settings("TDL", self.root / "private", destination="local",
+                            output_dir=self.root / "saved")
+        settings.prepare_storage()
+        storage = LocalClient(settings)
+        batch = {"peer": "-123", "start_mid": "21", "done_mid": "21",
+                 "media": ["21"], "downloaded": {"21": "Course.part1.rar"},
+                 "media_meta": {"21": {"size": "1000.0 MB", "downloaded_size": 1048444928}},
+                 "auto": True, "group_key": "parts:course", "quiet_since": time.time(),
+                 "awaiting_more": True, "awaiting_password": True, "destination": "local",
+                 "extract_engine_version": EXTRACT_ENGINE_VERSION}
+        incoming = _batch_root(settings, batch) / "archives"
+        incoming.mkdir(parents=True)
+        volume = incoming / "Course.part1.rar"
+        volume.write_bytes(b"short")
+        _save_control(settings, {"last_command_mid": "0", "batch": batch, "ignored_media": []})
+        browser = type("Browser", (), {"send_text": AsyncMock(),
+                                      "download": AsyncMock(side_effect=OSError("offline"))})()
+        events = [{"type": "media", "peer": "-123", "mid": "21", "kind": "bubble",
+                   "label": "Course.part1.rar", "size": "1000.0 MB"}]
+        asyncio.run(_process_extract_commands(settings, browser, storage,
+                                               storage.choose_folder(), "-123", events))
+        saved = _load_control(settings)["batch"]
+        self.assertFalse(volume.exists())
+        self.assertNotIn("21", saved["downloaded"])
+        self.assertFalse(saved["awaiting_more"])
+        self.assertFalse(saved["awaiting_password"])
+        browser.download.assert_awaited_once()
 
     def test_archive_arriving_while_password_is_pending_is_deferred(self):
         settings = Settings("TDL", self.root / "private", destination="local",

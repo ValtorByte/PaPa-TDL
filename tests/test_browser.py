@@ -9,7 +9,15 @@ import unittest
 from playwright.async_api import async_playwright
 
 from tdl_watcher.config import Settings
-from tdl_watcher.telegram import TelegramBrowser
+from tdl_watcher.telegram import TelegramBrowser, matches_displayed_size
+
+
+class DisplayedSizeTests(unittest.TestCase):
+    def test_short_completed_browser_volume_is_rejected(self):
+        self.assertTrue(matches_displayed_size("1000.0 MB / 1000.0 MB", 1048576000))
+        self.assertFalse(matches_displayed_size("1000.0 MB / 1000.0 MB", 1048444928))
+        self.assertTrue(matches_displayed_size("418.9 MB / 418.9 MB", 439269342))
+        self.assertTrue(matches_displayed_size("", 123456))
 
 
 @unittest.skipUnless(os.environ.get('PAPA_TDL_BROWSER_TEST') == '1', 'Set PAPA_TDL_BROWSER_TEST=1 for Chromium fixtures')

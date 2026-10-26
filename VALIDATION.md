@@ -1,6 +1,12 @@
-# PaPa-TDL 1.6.9 validation
+# PaPa-TDL 1.6.10 validation
 
-## Automated checks
+## Current incomplete-volume investigation (26 October 2026)
+
+- A seven-volume encrypted RAR set in the Colab watcher reported `Unexpected end of archive` when `unrar lt` read part 1 with the supplied password. The first six volumes were displayed as `1000.0 MB`; only part 5 measured the expected 1,048,576,000 bytes. The other five measured 131,072 to 2,490,368 bytes short. This rules out a wrong password as the cause of that error.
+- Patched the running Colab package to reject the short browser file and retry the staged batch. The watcher identified part 1 as incomplete. At least three re-download attempts still ended short. The Colab runtime then reported a disconnection, so extraction and Drive upload of this seven-volume set were **not** verified.
+- Local regression tests verify size rounding and recovery of a short staged volume. `114` unit tests passed, with two opt-in tests skipped. This is a correctness guard, not evidence that Telegram Web can deliver this specific multi-gigabyte set intact.
+
+## Earlier 1.6.9 checks
 
 - `.venv/bin/python -m unittest discover -s tests -q` passed: 112 tests, including two opt-in cases skipped. The suite exercises local transfer, duplicate detection, recovery, hosted OAuth logic with mocked endpoints, Drive metadata and checksum checks with mocked APIs, terminal/PTY input, installer paths, archive grouping, Unicode extractor locales, repeated filenames across numbered archives, and real terminal resizing at 40, 60, 80, 120 and 160 columns.
 - A later RAR volume appearing before earlier messages now triggers an older-history scan. Numbered independent archives such as `Course_Part01 (01-22).rar` and `Course_Part02 (23-43).rar` join one batch. A two-file numbered ZIP set was extracted into one local folder, and an older saved batch was migrated in tests.
@@ -16,7 +22,7 @@
 
 ## Not verified in this checkout
 - The hosted Google OAuth broker, public production consent and domain verification are external deployments and must be checked independently before promising ordinary users a working sign-in link.
-- This revision has not been installed on hunt or another VPS. The user requested no Tailscale access, and no alternative authorized connection was used here. The Colab installation was patched in place for the live recovery; install version 1.6.9 from the repository for persistent deployment.
+- This revision has not been installed on hunt or another VPS. The user requested no Tailscale access, and no alternative authorized connection was used here. The Colab installation was patched in place for the live recovery; install version 1.6.10 from the repository for persistent deployment.
 - GitHub CI, macOS, Windows and a fresh container install have not run for this revision. The installer targets Ubuntu/Debian; other systems use the documented manual path.
 
 ## Remaining limits

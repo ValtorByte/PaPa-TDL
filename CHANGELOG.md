@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.10 — detect incomplete Telegram Web downloads
+
+- Compare completed browser downloads with Telegram Web's displayed size, accounting for the display's rounding. A browser download event alone can report success for a truncated RAR volume.
+- Recheck previously staged archive parts on restart. Discard incomplete parts and retry their Telegram download before extraction.
+- Keep a failed batch visible for recovery; do not report extraction or Drive upload as successful when archive integrity fails.
+- Telegram Web may repeatedly provide incomplete large files. A repeated short-file error requires a different transfer path; this release does not add Telethon or remove the need for a user's Telegram API credentials for that path.
+
 ## 1.6.9 — Unicode RAR names and numbered archive collisions
 
 - Run archive extractors in a UTF-8 locale so Persian filenames keep their original names and do not collide as question marks.

@@ -18,7 +18,7 @@ from .common import StorageError
 from .telegram import safe_filename
 from .ui import ProgressBar
 
-EXTRACT_ENGINE_VERSION = 6
+EXTRACT_ENGINE_VERSION = 7
 
 
 class PasswordRequired(StorageError):

@@ -22,7 +22,7 @@ from .common import StorageError
 from .extract import (InvalidArchivePassword, PasswordRequired, PART_RE, SERIES_RE, ARCHIVE_RE,
                       EXTRACT_ENGINE_VERSION, batch_folder_name, extract_archives)
 from .storage import make_storage
-from .telegram import TelegramBrowser, TelegramError, safe_filename
+from .telegram import TelegramBrowser, TelegramError, matches_displayed_size, safe_filename
 
 
 PENDING_RE = re.compile(r"^([1-9][0-9]{0,16})_([1-9][0-9]{0,19})$")
@@ -353,13 +353,16 @@ async def _process_extract_commands(settings, browser, storage, folder_id, peer,
         if mid in batch["downloaded"]:
             staged_path = incoming / batch["downloaded"][mid]
             exact_size = batch.get("media_meta", {}).get(mid, {}).get("downloaded_size")
+            displayed_size = batch.get("media_meta", {}).get(mid, {}).get("size", "")
             if (staged_path.is_file() and staged_path.stat().st_size > 0
-                    and (exact_size is None or staged_path.stat().st_size == int(exact_size))):
+                    and (exact_size is None or staged_path.stat().st_size == int(exact_size))
+                    and matches_displayed_size(displayed_size, staged_path.stat().st_size)):
                 continue
             staged_path.unlink(missing_ok=True)
             batch["downloaded"].pop(mid, None)
             batch.pop("last_attempt_signature", None)
             batch["awaiting_more"] = False
+            batch["awaiting_password"] = False
             print(f"Archive part {mid} is incomplete; downloading it again.", flush=True)
             _save_control(settings, control)
         spec = specs.get(mid)
