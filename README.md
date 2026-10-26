@@ -128,6 +128,8 @@ papa-tdl logs -f
 
 The default Drive folder is **TDL**. You do not need to enter a folder ID. A custom folder must already be accessible to this OAuth app because it uses the limited `drive.file` scope. Refresh tokens are private and are refreshed when Google permits; revoked access or an expired testing-mode grant needs another `drive-login`.
 
+The terminal menu redraws when its width changes. Below 100 columns it uses a compact list; below 55 columns it uses a plain title. Running `papa-tdl` again after upgrading replaces the old rendered menu.
+
 ## Save on the VPS
 
 Run `papa-tdl setup` and select **local**. Press Enter at the output prompt to use the prepared default folder, or enter an absolute writable directory. Google sign-in is not needed.
@@ -209,7 +211,7 @@ papa-tdl --version
 papa-tdl
 ```
 
-If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.6`. An older `main` script will still run the older installer.
+If you use the remote one-command installer, first publish the new source to GitHub and check that the fetched script prints `INSTALLER 1.6.7`. An older `main` script will still run the older installer.
 
 If the Playwright browser CDN returns a regional 403, the installer automatically uses an existing system browser or tries the official Chrome system package. The selected executable is saved in the launcher, so normal runs do not download a browser again.
 

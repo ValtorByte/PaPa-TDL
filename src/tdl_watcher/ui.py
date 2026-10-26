@@ -136,11 +136,11 @@ def unicode_terminal():
 
 
 def logo_lines():
-    columns = shutil.get_terminal_size((80, 24)).columns
-    if unicode_terminal() and columns >= 65:
+    columns = _terminal_columns()
+    if unicode_terminal() and columns >= 100:
         return [color(line.rstrip(), "1;95" if index < 3 else "35")
                 for index, line in enumerate(WORDMARK)]
-    if columns >= 42:
+    if columns >= 55:
         return [color(line.rstrip(), "95") for line in COMPACT_WORDMARK]
     return [color("PaPa-TDL", "1;95")]
 
@@ -233,6 +233,18 @@ def dashboard(settings):
         if saved:
             return color("! saved; connection unverified", "1;93")
         return color("· sign-in required" if unicode_terminal() else "- sign-in required", "1;93")
+
+    if _terminal_columns() < 100:
+        width = max(12, _terminal_columns() - 1)
+        print(color("  STATUS", "1;95"))
+        print("  Telegram  " + account_label(telegram_saved,
+              telegram_saved and verified_recently(settings, "telegram")))
+        print("  Google    " + account_label(drive_saved,
+              drive_saved and verified_recently(settings, "drive")))
+        print("  Watcher   " + status(bool(running), "running", "stopped"))
+        print("  " + _fit("Save to: " + ("Drive / " + (settings.drive_folder_id or "TDL")
+              if settings.destination == "drive" else str(settings.local_root)), width - 2))
+        return
 
     panel_row([
         ("01 / Accounts", ["Telegram  " + account_label(telegram_saved,

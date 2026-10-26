@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.7 — terminal resize fix
+
+- Redraw the interactive menu when the terminal width changes while it is open. A compact menu replaces wide bordered cards below 100 columns, and the banner shrinks below 55 columns.
+- Exercise real PTY resizing at 40, 60, 80, 120 and 160 columns. This fixes the overlapping borders reproduced in the Google Colab terminal.
+
 ## 1.6.6 — prepared, not deployed
 
 - Use a controlling terminal for native `unrar` password prompts. Hidden passwords are not passed in process arguments or stored by the new handoff path.

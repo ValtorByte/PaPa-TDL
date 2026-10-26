@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import signal
 import sys
 import threading
@@ -23,7 +24,7 @@ from .locks import locked
 from .service import retry_pending, submit_extract_password, watch
 from .storage import make_storage, LocalClient
 from .telegram import TelegramBrowser, TelegramError, safe_filename
-from .ui import banner, color, panel, panel_row, dashboard, message
+from .ui import banner, color, panel, panel_row, dashboard, message, _terminal_columns
 
 
 def setup(settings):
@@ -116,29 +117,95 @@ def first_run(settings):
           "3. See transfers: papa-tdl logs -f"])
 
 
-def menu(settings):
+MENU_ITEMS = (
+    ("1", "Open live service", "console"),
+    ("2", "Select Telegram files", "select"),
+    ("3", "Watch in this terminal", "watch"),
+    ("4", "Download from URL", "download"),
+    ("5", "Telegram sign-in", "login"),
+    ("6", "Google Drive sign-in", "drive-login"),
+    ("7", "Storage settings", "setup"),
+    ("8", "Check destination", "check"),
+    ("9", "Watcher status", "status"),
+    ("10", "Open live activity", "console"),
+    ("11", "Drive file link", "share"),
+    ("12", "Stop background service", "stop"),
+    ("0", "Exit", None),
+)
+
+
+def _draw_menu(settings, typed=""):
     if sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
         print("\033[2J\033[H", end="")
     banner()
     dashboard(settings)
     print(color("  CONTROL CENTER  /  v" + __version__, "1;95"))
-    panel_row([
-        ("Files & live service", [color(" 1  Open live service", "1;92"),
-            " 2  Select Telegram files", " 3  Watch in this terminal",
-            " 4  Download from URL", "", "Passwords and errors appear",
-            "inside the live service."], "95"),
-        ("Accounts & storage", [" 5  Telegram sign-in", " 6  Google Drive sign-in",
-            " 7  Storage settings", " 8  Check destination", "",
-            "Send ZIP / RAR / 7z to TDL.", "Related parts group automatically."], "36"),
-        ("Activity & controls", [" 9  Watcher status", "10  Open live activity",
-            "11  Drive file link", color("12  Stop background service", "93"), " 0  Exit", "",
-            "Ctrl+C returns to the menu.", "No extra Enter needed."], "35"),
-    ])
-    choice = input(color("  Choose [0-12]: ", "1;95")).strip()
+    if _terminal_columns() < 100:
+        for number, label, _ in MENU_ITEMS:
+            style = "1;92" if number == "1" else "1;93" if number == "12" else "0"
+            print(color(f"  {number:>2}  {label}", style))
+    else:
+        panel_row([
+            ("Files & live service", [color(" 1  Open live service", "1;92"),
+                " 2  Select Telegram files", " 3  Watch in this terminal",
+                " 4  Download from URL", "", "Passwords and errors appear",
+                "inside the live service."], "95"),
+            ("Accounts & storage", [" 5  Telegram sign-in", " 6  Google Drive sign-in",
+                " 7  Storage settings", " 8  Check destination", "",
+                "Send ZIP / RAR / 7z to TDL.", "Related parts group automatically."], "36"),
+            ("Activity & controls", [" 9  Watcher status", "10  Open live activity",
+                "11  Drive file link", color("12  Stop background service", "93"), " 0  Exit", "",
+                "Ctrl+C returns to the menu.", "No extra Enter needed."], "35"),
+        ])
+    print(color("  Choose [0-12]: ", "1;95"), end="")
+    print(typed, end="", flush=True)
+
+
+def _read_resizable_choice(settings):
+    """Read a menu number while redrawing after a terminal resize."""
+    import termios
+    import tty
+
+    descriptor = sys.stdin.fileno()
+    original = termios.tcgetattr(descriptor)
+    typed = ""
+    last_columns = None
+    try:
+        tty.setcbreak(descriptor)
+        while True:
+            columns = _terminal_columns()
+            if columns != last_columns:
+                _draw_menu(settings, typed)
+                last_columns = columns
+            ready, _, _ = select.select([descriptor], [], [], 0.15)
+            if not ready:
+                continue
+            chunk = os.read(descriptor, 32)
+            if not chunk:
+                raise EOFError
+            for byte in chunk:
+                if byte in (10, 13):
+                    print()
+                    return typed
+                if byte in (8, 127) and typed:
+                    typed = typed[:-1]
+                    print("\b \b", end="", flush=True)
+                elif 48 <= byte <= 57 and len(typed) < 2:
+                    typed += chr(byte)
+                    print(chr(byte), end="", flush=True)
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, original)
+
+
+def menu(settings):
+    if os.name == "posix" and sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
+        choice = _read_resizable_choice(settings).strip()
+    else:
+        _draw_menu(settings)
+        choice = input().strip()
     if choice == "0":
         return None
-    commands = {"1": "console", "2": "select", "3": "watch", "4": "download", "5": "login", "6": "drive-login",
-                "7": "setup", "8": "check", "9": "status", "10": "console", "11": "share", "12": "stop"}
+    commands = {number: command for number, _, command in MENU_ITEMS}
     if choice not in commands:
         raise ValueError("Choose a menu number from 0 to 12.")
     command, argv = commands[choice], [commands[choice]]
