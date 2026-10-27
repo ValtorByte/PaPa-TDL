@@ -33,7 +33,7 @@ repo=${PAPA_TDL_REPO:-ValtorByte/PaPa-TDL}
 ref=${PAPA_TDL_REF:-main}
 [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo 'Invalid repository.' >&2; exit 1; }
 [[ "$ref" =~ ^[A-Za-z0-9_./-]+$ && "$ref" != -* && "$ref" != *..* ]] || { echo 'Invalid Git ref.' >&2; exit 1; }
-printf '\n\033[95m  PaPa-TDL / INSTALLER 1.6.10\033[0m\n  Telegram files → Drive or local storage\n\n'
+printf '\n\033[95m  PaPa-TDL / INSTALLER 1.6.11\033[0m\n  Telegram files → Drive or local storage\n\n'
 echo '[1/5] Preparing the host...'
 root=0
 [[ $(id -u) == 0 ]] && root=1
@@ -105,7 +105,7 @@ if ! flock -n "$install_lock"; then
   exit 1
 fi
 if (( root )); then chown "$run_as:$(id -gn "$run_as")" "$data_dir/app.lock"; fi
-stage=$(mktemp -d "$prefix/releases/1.6.10-XXXXXXXX")
+stage=$(mktemp -d "$prefix/releases/1.6.11-XXXXXXXX")
 chmod 755 "$stage"
 temporary_source=''
 completed=0

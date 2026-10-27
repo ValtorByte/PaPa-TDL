@@ -29,9 +29,11 @@ class BrowserTests(unittest.TestCase):
                 settings.prepare_storage()
                 browser = TelegramBrowser(settings)
                 async with async_playwright() as runner:
+                    executable = os.environ.get('TDL_CHROMIUM_EXECUTABLE')
                     browser.context = await runner.chromium.launch_persistent_context(
                         str(settings.data_dir / 'browser-profile'), headless=True,
-                        accept_downloads=True, downloads_path=str(settings.data_dir / 'browser-downloads'))
+                        accept_downloads=True, downloads_path=str(settings.data_dir / 'browser-downloads'),
+                        **({'executable_path': executable} if executable else {}))
                     browser.page = browser.context.pages[0]
                     await browser.page.set_content('''
                     <div id="page-chats" style="height:20px">Chats</div><div id="column-center"><div class="bubbles-scrollable">

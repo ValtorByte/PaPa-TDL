@@ -14,6 +14,7 @@ from playwright.async_api import Error as BrowserError, async_playwright
 
 from .config import Settings
 from .ui import ProgressBar, message
+from .web_range import RangeFailure, RangeUnavailable, document_metadata, download_ranges
 
 
 WEB_URL = "https://web.telegram.org/k/"
@@ -21,6 +22,7 @@ PHONE_INPUT = '#auth-pages .input-field-phone .input-field-input:visible'
 CODE_INPUT = '#auth-pages input[autocomplete="one-time-code"]:visible, #auth-pages input[name="sms-word"]:visible'
 PASSWORD_INPUT = '#auth-pages input[type="password"]:visible'
 MIN_FREE_BYTES = 512 * 1024 * 1024
+RESUME_REQUIRED_BYTES = 75 * 1024 * 1024
 
 
 class TelegramError(RuntimeError):
@@ -56,7 +58,7 @@ def safe_filename(value: str, fallback: str) -> str:
 
 def estimated_bytes(label: str) -> int:
     scale = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
-    sizes = [float(number.replace(",", "")) * scale[unit.upper()]
+    sizes = [float(number.replace(",", ".")) * scale[unit.upper()]
              for number, unit in re.findall(r"([0-9]+(?:[.,][0-9]+)?)\s*(TB|GB|MB|KB|B)\b", label, re.I)]
     return math.ceil(max(sizes)) if sizes else 0
 
@@ -73,8 +75,9 @@ def matches_displayed_size(label: str, actual_bytes: int) -> bool:
     if not matches:
         return True
     number, unit = max(matches, key=lambda item: float(item[0].replace(",", ".")) * scale[item[1].upper()])
+    number = number.replace(",", ".")
     precision = len(number.split(".", 1)[1]) if "." in number else 0
-    expected = float(number.replace(",", ".")) * scale[unit.upper()]
+    expected = float(number) * scale[unit.upper()]
     tolerance = 0.5 * 10 ** -precision * scale[unit.upper()] + 4096
     return abs(actual_bytes - expected) <= tolerance
 
@@ -441,13 +444,52 @@ class TelegramBrowser:
         estimate = estimated_bytes(" ".join(labels))
         if self.settings.max_download_bytes and estimate > self.settings.max_download_bytes:
             raise TelegramError("Telegram media exceeds TDL_MAX_DOWNLOAD_BYTES.")
-        if shutil.disk_usage(self.settings.data_dir).free < MIN_FREE_BYTES + int(estimate * 2.1):
-            raise TelegramError("Insufficient local disk space for a browser download.")
         owns_destination = destination is None
         destination = destination or self.settings.pending_dir / f"{peer[1:]}_{mid}"
         if owns_destination and destination.exists() and list(destination.iterdir()):
             raise TelegramError("A pending local copy already exists for this message; retry its upload first.")
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Telegram Web K's range worker can resume from verified checkpoints.
+        # Use it only for documents with metadata from the current web session;
+        # other media keeps the ordinary browser download path.
+        doc_id = spec.get("doc_id")
+        is_document = bool(await target.locator(".document").count())
+        if not doc_id and is_document:
+            doc_id = await target.locator(".document").first.get_attribute("data-doc-id")
+        try:
+            meta = await document_metadata(self.page, doc_id)
+        except (RangeUnavailable, BrowserError):
+            meta = None
+        if is_document and not meta:
+            print("Telegram Web range metadata is unavailable; browser download cannot resume.", flush=True)
+        if is_document and not meta and estimate >= RESUME_REQUIRED_BYTES:
+            raise TelegramError("Telegram Web cannot resume this large document in the current session; "
+                                "a full download was not restarted. Update or reconnect Telegram Web.")
+        if meta:
+            filename = safe_filename(meta.get("name"), f"telegram_{mid}.bin")
+            if filename in {"upload.json", "upload.json.tmp", "source.json", "source.tmp", "payload.part"}:
+                filename = "file_" + filename
+            progress = ProgressBar("Telegram download", meta["size"])
+            try:
+                path = await download_ranges(
+                    self.page, meta, destination, self.settings.data_dir / "range-parts",
+                    peer, mid, filename, progress, self.settings.max_download_bytes,
+                )
+            except RangeUnavailable:
+                progress.finish("range download unavailable", success=False)
+                if meta["size"] >= RESUME_REQUIRED_BYTES:
+                    raise TelegramError("Telegram Web cannot resume this large document in the current session; "
+                                        "a full download was not restarted. Update or reconnect Telegram Web.") from None
+                print("Using the ordinary browser download for this small file.", flush=True)
+            except RangeFailure as exc:
+                progress.finish("interrupted; verified progress retained", success=False)
+                raise TelegramError(str(exc)) from None
+            else:
+                progress.finish(f"{path.name} ready")
+                print(f"Downloaded: {path.name} ({path.stat().st_size} bytes).", flush=True)
+                return path
+        if shutil.disk_usage(self.settings.data_dir).free < MIN_FREE_BYTES + int(estimate * 2.1):
+            raise TelegramError("Insufficient local disk space for a browser download.")
         path = None
         created_path = False
         browser_path = None

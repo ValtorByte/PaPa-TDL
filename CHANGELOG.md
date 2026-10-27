@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.11 — checkpointed Telegram Web documents
+
+- Download document ranges with verified checkpoints when the Web K worker supports it.
+- Retain completed blocks across interruptions and reject incorrect range responses.
+- Stop large document downloads if resuming is unavailable instead of repeatedly downloading from zero.
+
+
 ## 1.6.10 — detect incomplete Telegram Web downloads
 
 - Compare completed browser downloads with Telegram Web's displayed size, accounting for the display's rounding. A browser download event alone can report success for a truncated RAR volume.

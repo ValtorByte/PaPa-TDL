@@ -1,3 +1,13 @@
+# PaPa-TDL 1.6.11 validation
+
+- Local automated suite: 118 tests passed, including checkpoint interruption and corruption checks; 3 optional tests were skipped.
+- A real Chromium test using a local service worker passed for the range protocol and final short block.
+- The range transport relies on undocumented Telegram Web K internals. It has not yet been tested end to end on a real Telegram account or against the reported multi-part RAR. Range support and final extraction/upload remain unverified in that environment.
+- Previously discarded partial browser downloads cannot be recovered. New verified range checkpoints are retained under the private application data directory.
+- This revision has not been published or deployed to any server.
+
+## Previous validation
+
 # PaPa-TDL 1.6.10 validation
 
 ## Current incomplete-volume investigation (26 October 2026)
